@@ -11,8 +11,18 @@ app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
 
 const CANVAS_TOKEN = process.env.CANVAS_TOKEN;
-const CANVAS_BASE_URL =
-  process.env.CANVAS_BASE_URL || "https://canvas.asu.edu/api/v1";
+const CANVAS_BASE_URL = normalizeCanvasBaseUrl(
+  process.env.CANVAS_BASE_URL || "https://canvas.asu.edu/api/v1"
+);
+
+function normalizeCanvasBaseUrl(baseUrl) {
+  const trimmed = (baseUrl || "").trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "https://canvas.asu.edu/api/v1";
+  }
+
+  return trimmed.endsWith("/api/v1") ? trimmed : `${trimmed}/api/v1`;
+}
 
 // Anthropic client (lazy – only created when needed)
 let anthropic = null;
@@ -43,6 +53,17 @@ async function canvasRequest(path) {
     throw error;
   }
 
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await res.text();
+    const error = new Error(
+      "Canvas returned HTML instead of JSON. Check CANVAS_BASE_URL and make sure it points to your Canvas site or API root."
+    );
+    error.status = 502;
+    error.detail = text.slice(0, 300);
+    throw error;
+  }
+
   return res.json();
 }
 
@@ -61,6 +82,17 @@ async function canvasRequestAll(path, maxPages = 10) {
       const error = new Error(`Canvas API error (${res.status})`);
       error.status = res.status;
       error.detail = text;
+      throw error;
+    }
+
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      const text = await res.text();
+      const error = new Error(
+        "Canvas returned HTML instead of JSON. Check CANVAS_BASE_URL and make sure it points to your Canvas site or API root."
+      );
+      error.status = 502;
+      error.detail = text.slice(0, 300);
       throw error;
     }
 
@@ -100,6 +132,310 @@ async function downloadCanvasFile(fileUrl) {
 
 // In-memory cache for extracted PDF text (fileId -> text)
 const textCache = new Map();
+
+function stripHtml(html = "") {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatDateLabel(dateInput) {
+  if (!dateInput) return "TBD";
+  const date = new Date(dateInput);
+  if (Number.isNaN(date.getTime())) return "TBD";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function safeNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizePlanPreferences(input = {}) {
+  const focusDays = Array.isArray(input.focusDays)
+    ? input.focusDays.filter(Boolean)
+    : ["Mon", "Tue", "Wed", "Thu", "Fri"];
+  const startDate = input.startDate || new Date().toISOString().slice(0, 10);
+  const endDate = input.endDate || startDate;
+
+  return {
+    startDate,
+    endDate: endDate < startDate ? startDate : endDate,
+    hoursPerWeek: Math.max(1, Math.min(40, safeNumber(input.hoursPerWeek, 8))),
+    sessionMinutes: Math.max(20, Math.min(240, safeNumber(input.sessionMinutes, 60))),
+    focusDays: focusDays.length > 0 ? focusDays : ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    priorities: Array.isArray(input.priorities) ? input.priorities.filter(Boolean) : [],
+    selectedModuleIds: Array.isArray(input.selectedModuleIds)
+      ? input.selectedModuleIds.map((value) => String(value))
+      : [],
+    includeAssignments: input.includeAssignments !== false,
+    objective: (input.objective || "General study plan").trim(),
+    pace: input.pace || "balanced",
+  };
+}
+
+function enumerateWeeklyRanges(startDate, endDate) {
+  const ranges = [];
+  const start = new Date(`${startDate}T12:00:00`);
+  const end = new Date(`${endDate}T12:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return [{ label: "Week 1", startDate, endDate }];
+  }
+
+  let cursor = new Date(start);
+  let index = 1;
+  while (cursor <= end && index <= 16) {
+    const weekStart = new Date(cursor);
+    const weekEnd = new Date(cursor);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    if (weekEnd > end) {
+      weekEnd.setTime(end.getTime());
+    }
+
+    ranges.push({
+      label: `Week ${index} • ${formatDateLabel(weekStart)} - ${formatDateLabel(weekEnd)}`,
+      startDate: weekStart.toISOString().slice(0, 10),
+      endDate: weekEnd.toISOString().slice(0, 10),
+    });
+
+    cursor.setDate(cursor.getDate() + 7);
+    index += 1;
+  }
+
+  return ranges.length > 0 ? ranges : [{ label: "Week 1", startDate, endDate }];
+}
+
+function buildFallbackStudyPlan({
+  courseName,
+  syllabusText,
+  assignments,
+  preferences,
+  scopedModules = [],
+}) {
+  const cleanSyllabus = stripHtml(syllabusText || "");
+  const sentences = cleanSyllabus.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const overview = sentences.slice(0, 3).join(" ") || `Study plan for ${courseName}.`;
+  const sortedAssignments = [...assignments]
+    .filter((assignment) => assignment.due_at)
+    .sort((a, b) => new Date(a.due_at) - new Date(b.due_at))
+    .slice(0, 6);
+  const weeklyRanges = enumerateWeeklyRanges(preferences.startDate, preferences.endDate);
+  const moduleNames = scopedModules.map((module) => module.name).filter(Boolean);
+
+  const weeklyHours = preferences.hoursPerWeek;
+  const sessionCount = Math.max(
+    1,
+    Math.round((weeklyHours * 60) / preferences.sessionMinutes)
+  );
+  const sessionsPerDay = Math.max(
+    1,
+    Math.ceil(sessionCount / preferences.focusDays.length)
+  );
+
+  const priorityText =
+    preferences.priorities.length > 0
+      ? `Prioritize ${preferences.priorities.join(", ")}.`
+      : "Balance understanding, revision, and assignment progress.";
+
+  return {
+    overview: `${overview} This plan covers ${formatDateLabel(preferences.startDate)} to ${formatDateLabel(preferences.endDate)} for ${preferences.objective.toLowerCase()}.`,
+    recommendations: [
+      `Study about ${weeklyHours} hours per week in ${preferences.sessionMinutes}-minute sessions.`,
+      `Use ${preferences.focusDays.join(", ")} as your main study days with roughly ${sessionsPerDay} focused block(s) each day across the full date range.`,
+      priorityText,
+      moduleNames.length > 0
+        ? `Focus only on these modules: ${moduleNames.join(", ")}.`
+        : "Use all available modules and related materials in scope.",
+    ],
+    weeklyPlan: weeklyRanges.map((range, index) => ({
+      day: range.label,
+      focus: index === 0
+        ? `Set up your ${preferences.objective.toLowerCase()} strategy and preview key topics`
+        : index === weeklyRanges.length - 1
+          ? "Consolidate, self-test, and close remaining weak spots"
+          : "Work through the scoped material and reinforce understanding",
+      tasks: [
+        moduleNames[index]
+          ? `Focus on module: ${moduleNames[index]}.`
+          : "Review notes, readings, and course pages in your chosen scope.",
+        "Create or refine flashcards from the highest-yield concepts.",
+        sortedAssignments[index]
+          ? `Make progress on "${sortedAssignments[index].name}" before ${formatDateLabel(sortedAssignments[index].due_at)}.`
+          : `Complete one focused study block on the hardest topic during ${range.label}.`,
+      ],
+    })),
+    milestones: sortedAssignments.map((assignment) => ({
+      title: assignment.name,
+      dueDate: assignment.due_at,
+      reason: `Assignment worth ${assignment.points_possible ?? "?"} points is due ${formatDateLabel(assignment.due_at)}.`,
+    })),
+    customTips: [
+      "Turn each module into 3 to 5 recall questions.",
+      "Reserve one session each week only for practice and self-testing.",
+      "Update this plan after new announcements or due dates appear in Canvas.",
+    ],
+  };
+}
+
+async function resolveCourseSyllabus(courseId) {
+  const course = await canvasRequest(
+    `/courses/${courseId}?include[]=syllabus_body&include[]=term`
+  );
+
+  const directHtml = course.syllabus_body || "";
+  const directText = stripHtml(directHtml);
+  if (directText) {
+    return {
+      course,
+      syllabusHtml: directHtml,
+      syllabusText: directText,
+      source: "course.syllabus_body",
+    };
+  }
+
+  try {
+    const frontPage = await canvasRequest(`/courses/${courseId}/front_page`);
+    const frontPageHtml = frontPage.body || "";
+    const frontPageText = stripHtml(frontPageHtml);
+    const frontPageTitle = (frontPage.title || "").toLowerCase();
+    if (
+      frontPageText &&
+      (frontPageTitle.includes("syllabus") || frontPageTitle.includes("course information"))
+    ) {
+      return {
+        course,
+        syllabusHtml: frontPageHtml,
+        syllabusText: frontPageText,
+        source: "front_page",
+      };
+    }
+  } catch {
+    // Front page is optional.
+  }
+
+  try {
+    const pages = await canvasRequestAll(`/courses/${courseId}/pages?per_page=100`);
+    const syllabusCandidate = pages.find((page) => {
+      const title = (page.title || "").toLowerCase();
+      const url = (page.url || "").toLowerCase();
+      return (
+        title.includes("syllabus") ||
+        url.includes("syllabus") ||
+        title.includes("course information")
+      );
+    });
+
+    if (syllabusCandidate?.url) {
+      const pageDetail = await canvasRequest(
+        `/courses/${courseId}/pages/${encodeURIComponent(syllabusCandidate.url)}`
+      );
+      const pageHtml = pageDetail.body || "";
+      const pageText = stripHtml(pageHtml);
+      if (pageText) {
+        return {
+          course,
+          syllabusHtml: pageHtml,
+          syllabusText: pageText,
+          source: "course_page",
+        };
+      }
+    }
+  } catch {
+    // Pages lookup is best-effort.
+  }
+
+  return {
+    course,
+    syllabusHtml: "",
+    syllabusText: "",
+    source: "none",
+  };
+}
+
+async function generateStudyPlanWithAI({
+  courseName,
+  syllabusText,
+  assignments,
+  preferences,
+  scopedModules = [],
+}) {
+  let ai = null;
+  try {
+    ai = getAnthropic();
+  } catch {
+    return buildFallbackStudyPlan({
+      courseName,
+      syllabusText,
+      assignments,
+      preferences,
+      scopedModules,
+    });
+  }
+
+  const assignmentSummary = assignments
+    .slice(0, 12)
+    .map((assignment) => ({
+      name: assignment.name,
+      due_at: assignment.due_at,
+      points_possible: assignment.points_possible,
+    }));
+  const moduleSummary = scopedModules.map((module) => ({
+    id: module.id,
+    name: module.name,
+    position: module.position,
+  }));
+
+  const prompt = `Create a student-friendly study plan in valid JSON.
+
+Return an object with keys:
+- overview: string
+- recommendations: string[]
+- weeklyPlan: { day: string, focus: string, tasks: string[] }[]
+- milestones: { title: string, dueDate: string | null, reason: string }[]
+- customTips: string[]
+
+Course: ${courseName}
+Preferences: ${JSON.stringify(preferences)}
+Assignments: ${JSON.stringify(assignmentSummary)}
+Scoped modules: ${JSON.stringify(moduleSummary)}
+Syllabus: ${stripHtml(syllabusText).slice(0, 12000)}
+
+Rules:
+- Keep recommendations concise.
+- Build the weekly plan across the full startDate to endDate range, not just one week.
+- Match the plan to the provided objective and selected modules.
+- Make milestones practical and tied to due dates when available.
+- If selected modules are provided, concentrate only on that portion of the course.
+- Return JSON only.`;
+
+  const message = await ai.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1800,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const rawText = message.content[0]?.text || "";
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return buildFallbackStudyPlan({
+      courseName,
+      syllabusText,
+      assignments,
+      preferences,
+      scopedModules,
+    });
+  }
+}
 
 // ── Existing Endpoints ────────────────────────────────────
 
@@ -195,6 +531,27 @@ app.get("/api/courses/:courseId/files", async (req, res) => {
     res
       .status(err.status || 500)
       .json({ error: `Failed to fetch files: ${err.message}` });
+  }
+});
+
+app.get("/api/courses/:courseId/syllabus", async (req, res) => {
+  try {
+    const syllabusData = await resolveCourseSyllabus(req.params.courseId);
+    const { course, syllabusHtml, syllabusText, source } = syllabusData;
+    res.json({
+      courseId: course.id,
+      courseName: course.name,
+      courseCode: course.course_code,
+      termName: course.term?.name || null,
+      syllabusHtml,
+      syllabusText,
+      source,
+      hasSyllabus: Boolean(syllabusText),
+    });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ error: `Failed to fetch syllabus: ${err.message}` });
   }
 });
 
@@ -534,6 +891,56 @@ ${combined}`,
     res
       .status(500)
       .json({ error: `Module summarization failed: ${err.message}` });
+  }
+});
+
+app.post("/api/study-plan", async (req, res) => {
+  const { courseId, preferences = {} } = req.body;
+  if (!courseId) {
+    return res.status(400).json({ error: "courseId is required" });
+  }
+
+  try {
+    const normalizedPreferences = normalizePlanPreferences(preferences);
+    const [syllabusData, assignments, modules] = await Promise.all([
+      resolveCourseSyllabus(courseId),
+      canvasRequestAll(`/courses/${courseId}/assignments?per_page=50&order_by=due_at`),
+      canvasRequestAll(`/courses/${courseId}/modules?per_page=100`),
+    ]);
+
+    const { course, syllabusText, source } = syllabusData;
+    const scopedModules =
+      normalizedPreferences.selectedModuleIds.length > 0
+        ? modules.filter((module) =>
+            normalizedPreferences.selectedModuleIds.includes(String(module.id))
+          )
+        : modules;
+    const plan = await generateStudyPlanWithAI({
+      courseName: course.name,
+      syllabusText,
+      assignments,
+      preferences: normalizedPreferences,
+      scopedModules,
+    });
+
+    res.json({
+      courseId: course.id,
+      courseName: course.name,
+      syllabusText,
+      syllabusSource: source,
+      hasSyllabus: Boolean(syllabusText),
+      preferences: normalizedPreferences,
+      scopedModules: scopedModules.map((module) => ({
+        id: module.id,
+        name: module.name,
+        position: module.position,
+      })),
+      plan,
+    });
+  } catch (err) {
+    res
+      .status(err.status || 500)
+      .json({ error: `Study plan generation failed: ${err.message}` });
   }
 });
 
