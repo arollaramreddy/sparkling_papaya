@@ -6,6 +6,7 @@ import StudyPlanWorkspace from "./study-plan/StudyPlanWorkspace";
 import studyPlanConfig from "./study-plan/study-plan.config.json";
 import QuizWorkspace from "./quiz/QuizWorkspace";
 import quizConfig from "./quiz/quiz.config.json";
+import ManualStudentInteractionView from "./manual/ManualStudentInteractionView";
 
 const API = "http://localhost:3001/api";
 const TAB_PATHS = {
@@ -355,11 +356,7 @@ function App() {
                     onNavigateSavedQuiz={(quizId) => navigateToPath(`/quiz/${encodeURIComponent(quizId)}`)}
                   />
                 ) : (
-                  <>
-                    <span className="panel-badge">Manual mode</span>
-                    <h2>Manual student interaction</h2>
-                    <p>This is the manual workspace tab.</p>
-                  </>
+                  <ManualStudentInteractionView apiBase={API} active={activeTab === "manual"} />
                 )}
               </div>
             )}

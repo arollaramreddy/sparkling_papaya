@@ -22,6 +22,11 @@ const {
 const { processQueuedAgentJobs } = require("./lib/agent-workers");
 const { buildLangGraphRuntimeState } = require("./lib/langgraph-runtime");
 const {
+  GENERATED_ROOT,
+  ensureLessonAudioDir,
+  generateLessonSlideAudio,
+} = require("./lib/lesson-audio");
+const {
   buildReplyDraftPrompt,
   classifyMessageIntent,
   getCourseFacts,
@@ -35,6 +40,8 @@ const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 
 app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json());
+ensureLessonAudioDir();
+app.use("/generated", express.static(GENERATED_ROOT));
 
 function normalizeCanvasApiBaseUrl(rawUrl) {
   const fallback = "https://canvas.asu.edu/api/v1";
@@ -3287,6 +3294,30 @@ ${truncated}`
     res.json(lesson);
   } catch (err) {
     res.status(500).json({ error: `Lesson generation failed: ${err.message}` });
+  }
+});
+
+app.post("/api/generate-lesson-audio", async (req, res) => {
+  const { lessonTitle, slideId, narration } = req.body || {};
+  if (!narration) {
+    return res.status(400).json({ error: "narration is required" });
+  }
+
+  try {
+    const audio = await generateLessonSlideAudio({
+      lessonTitle: lessonTitle || "lesson",
+      slideId: slideId || "slide",
+      text: narration,
+      backendUrl: BACKEND_URL,
+    });
+
+    res.json({
+      success: true,
+      audioUrl: audio.url,
+      fileName: path.basename(audio.filePath),
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Lesson audio generation failed: ${err.message}` });
   }
 });
 
