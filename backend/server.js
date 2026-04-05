@@ -55,10 +55,15 @@ const ALLOWED_FRONTEND_ORIGINS = Array.from(
     "http://127.0.0.1:5173",
   ].filter(Boolean))
 );
+const LOCAL_DEV_ORIGIN_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || ALLOWED_FRONTEND_ORIGINS.includes(origin)) {
+    if (
+      !origin ||
+      ALLOWED_FRONTEND_ORIGINS.includes(origin) ||
+      LOCAL_DEV_ORIGIN_PATTERN.test(origin)
+    ) {
       callback(null, true);
       return;
     }
@@ -333,22 +338,112 @@ function saveDerivedIntelligence(run) {
 }
 
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta";
 const OPENAI_MODEL_SUMMARY = process.env.OPENAI_MODEL_SUMMARY || "gpt-4.1-mini";
 const OPENAI_MODEL_AGENT = process.env.OPENAI_MODEL_AGENT || "gpt-4.1";
 const OPENAI_MODEL_LESSON = process.env.OPENAI_MODEL_LESSON || "gpt-4.1";
 
+function isUnsetPlaceholder(value) {
+  return !value || [
+    "your_openai_api_key_here",
+    "your_gemini_api_key_here",
+  ].includes(value);
+}
+
 function getOpenAIKey() {
-  if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "your_openai_api_key_here") {
-    throw new Error("OPENAI_API_KEY is not set in .env file");
+  return isUnsetPlaceholder(process.env.OPENAI_API_KEY) ? null : process.env.OPENAI_API_KEY;
+}
+
+function getGeminiKey() {
+  return isUnsetPlaceholder(process.env.GEMINI_API_KEY) ? null : process.env.GEMINI_API_KEY;
+}
+
+function getConfiguredAiKey() {
+  const apiKey = getOpenAIKey() || getGeminiKey();
+
+  if (!apiKey) {
+    throw new Error("Set OPENAI_API_KEY or GEMINI_API_KEY in backend/.env to use AI features");
   }
-  return process.env.OPENAI_API_KEY;
+
+  return apiKey;
+}
+
+function resolveGeminiModel(model) {
+  if (!model || String(model).startsWith("gpt-")) {
+    return process.env.GEMINI_MODEL || process.env.GEMINI_MODEL_SUMMARY || "gemini-2.5-flash";
+  }
+  return model;
+}
+
+function extractGeminiResponseText(data) {
+  return (data.candidates || [])
+    .flatMap((candidate) => candidate.content?.parts || [])
+    .map((part) => part.text)
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+async function createGeminiResponse(payload) {
+  if (payload.tools?.length || payload.previous_response_id) {
+    throw new Error("Gemini mode currently supports summary, quiz, study-plan, and lesson generation. Agent tool workflows still require OPENAI_API_KEY.");
+  }
+
+  const model = resolveGeminiModel(payload.model);
+  const promptSections = [];
+
+  if (payload.instructions) {
+    promptSections.push(String(payload.instructions));
+  }
+
+  if (typeof payload.input === "string") {
+    promptSections.push(payload.input);
+  } else if (payload.input != null) {
+    promptSections.push(JSON.stringify(payload.input));
+  }
+
+  const res = await fetch(`${GEMINI_API_URL}/models/${model}:generateContent`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": getGeminiKey(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: promptSections.filter(Boolean).join("\n\n"),
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error?.message || data.error || "Gemini request failed");
+  }
+
+  return {
+    id: data.responseId || data.modelVersion || "gemini-generate-content",
+    output_text: extractGeminiResponseText(data),
+    provider: "gemini",
+    raw: data,
+  };
 }
 
 async function createOpenAIResponse(payload) {
+  if (!getOpenAIKey() && getGeminiKey()) {
+    return createGeminiResponse(payload);
+  }
+
   const res = await fetch(OPENAI_API_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${getOpenAIKey()}`,
+      Authorization: `Bearer ${getConfiguredAiKey()}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -4441,7 +4536,12 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`Backend running → http://${HOST}:${PORT}`);
   console.log("Canvas auth mode: session token from successful login");
   console.log(
-    `OpenAI key: ${process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "your_openai_api_key_here" ? "loaded" : "MISSING – set OPENAI_API_KEY in .env for AI features"}`
+    `AI key: ${
+      (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "your_openai_api_key_here") ||
+      (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_gemini_api_key_here")
+        ? "loaded"
+        : "MISSING – set OPENAI_API_KEY or GEMINI_API_KEY in backend/.env for AI features"
+    }`
   );
 });
 

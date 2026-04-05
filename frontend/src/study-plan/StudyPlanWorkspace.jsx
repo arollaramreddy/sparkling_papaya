@@ -771,7 +771,7 @@ export default function StudyPlanWorkspace({
                                   />
                                   <button
                                     type="button"
-                                    className="danger-button feature-task-delete"
+                                    className="secondary-button feature-task-delete"
                                     onClick={() => removeDayTask(weekIndex, dayIndex, taskIndex)}
                                   >
                                     Remove

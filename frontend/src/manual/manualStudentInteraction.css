@@ -818,6 +818,61 @@
   font-size: 0.92rem;
 }
 
+:root:not([data-theme="light"]) .manual-workspace,
+:root:not([data-theme="light"]) .manual-header-copy h2,
+:root:not([data-theme="light"]) .manual-card-title,
+:root:not([data-theme="light"]) .manual-detail-title,
+:root:not([data-theme="light"]) .manual-section-title,
+:root:not([data-theme="light"]) .manual-course-name,
+:root:not([data-theme="light"]) .manual-module-name,
+:root:not([data-theme="light"]) .manual-file-title,
+:root:not([data-theme="light"]) .manual-summary-panel h4,
+:root:not([data-theme="light"]) .manual-lesson-panel h4,
+:root:not([data-theme="light"]) .manual-agent-target strong,
+:root:not([data-theme="light"]) .manual-agent-control-panel h4,
+:root:not([data-theme="light"]) .feature-output-hero h3,
+:root:not([data-theme="light"]) .feature-result-item strong,
+:root:not([data-theme="light"]) .feature-week-header h4,
+:root:not([data-theme="light"]) .feature-day-header strong,
+:root:not([data-theme="light"]) .manual-btn,
+:root:not([data-theme="light"]) .manual-back-btn,
+:root:not([data-theme="light"]) .manual-mode-chip,
+:root:not([data-theme="light"]) .manual-semester-tab,
+:root:not([data-theme="light"]) .manual-search-input,
+:root:not([data-theme="light"]) .manual-module-item,
+:root:not([data-theme="light"]) .manual-agent-target,
+:root:not([data-theme="light"]) .manual-count-pill,
+:root:not([data-theme="light"]) .manual-file-badge.other {
+  color: var(--text-1);
+}
+
+:root:not([data-theme="light"]) .manual-header-copy p,
+:root:not([data-theme="light"]) .manual-muted,
+:root:not([data-theme="light"]) .manual-course-meta,
+:root:not([data-theme="light"]) .manual-section-kicker,
+:root:not([data-theme="light"]) .manual-empty,
+:root:not([data-theme="light"]) .manual-search-meta,
+:root:not([data-theme="light"]) .manual-summary-content,
+:root:not([data-theme="light"]) .manual-extract-meta,
+:root:not([data-theme="light"]) .manual-lesson-meta,
+:root:not([data-theme="light"]) .manual-table td,
+:root:not([data-theme="light"]) .manual-table th,
+:root:not([data-theme="light"]) .manual-agent-target span,
+:root:not([data-theme="light"]) .manual-agent-target-state,
+:root:not([data-theme="light"]) .manual-agent-control-panel p,
+:root:not([data-theme="light"]) .manual-agent-control-meta,
+:root:not([data-theme="light"]) .feature-output-hero p,
+:root:not([data-theme="light"]) .feature-subcopy,
+:root:not([data-theme="light"]) .feature-muted,
+:root:not([data-theme="light"]) .feature-result-item p,
+:root:not([data-theme="light"]) .feature-result-item span,
+:root:not([data-theme="light"]) .feature-output-meta span,
+:root:not([data-theme="light"]) .feature-week-header p,
+:root:not([data-theme="light"]) .feature-day-header span,
+:root:not([data-theme="light"]) .feature-day-header small {
+  color: var(--text-2);
+}
+
 @keyframes manualOrbitReveal {
   from {
     stroke-dashoffset: 420;
@@ -3302,7 +3357,7 @@
 :root[data-theme="light"] .manual-lesson-meta,
 :root[data-theme="light"] .manual-table td,
 :root[data-theme="light"] .manual-table th {
-  color: #607086;
+  color: var(--text-surface-muted);
 }
 
 :root[data-theme="light"] .manual-card,
@@ -3349,7 +3404,7 @@
 :root[data-theme="light"] .manual-header-copy h2,
 :root[data-theme="light"] .manual-agent-item strong,
 :root[data-theme="light"] .manual-quiz-question {
-  color: #142133;
+  color: var(--text-surface-strong);
 }
 
 :root[data-theme="light"] .manual-btn,
@@ -3363,7 +3418,7 @@
 :root[data-theme="light"] .manual-extract-text,
 :root[data-theme="light"] .manual-quiz-option {
   background: #ffffff;
-  color: #213248;
+  color: var(--text-surface-field);
   border-color: #d7dfe8;
 }
 
@@ -3379,7 +3434,7 @@
 :root[data-theme="light"] .feature-week-header p,
 :root[data-theme="light"] .feature-day-header span,
 :root[data-theme="light"] .feature-day-header small {
-  color: #607086;
+  color: var(--text-surface-muted);
 }
 
 :root[data-theme="light"] .manual-btn.primary,
@@ -3394,5 +3449,5 @@
 :root[data-theme="light"] .manual-study-day-chip,
 :root[data-theme="light"] .manual-agent-target-state,
 :root[data-theme="light"] .manual-quiz-option-key {
-  color: #213248;
+  color: var(--text-surface-field);
 }

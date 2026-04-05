@@ -15,6 +15,15 @@ import { DEFAULT_PREFERENCES } from "./AutonomousAgentsWorkingView";
 
 const EMPTY_PARAMS = {};
 
+function isHiddenSessionError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("no authenticated session") ||
+    message.includes("login in the main app first") ||
+    message.includes("failed to check session")
+  );
+}
+
 function setNestedValue(object, path, value) {
   const keys = path.split(".");
   const result = { ...object };
@@ -120,11 +129,17 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
         if (messagesResult.status !== "fulfilled") {
           throw runtimeResult.reason;
         }
-        setError(runtimeResult.reason?.message || "Runtime state unavailable, showing raw inbox only");
+        if (!isHiddenSessionError(runtimeResult.reason)) {
+          setError(runtimeResult.reason?.message || "Runtime state unavailable, showing raw inbox only");
+        }
       }
       setStateEvents(eventsResult || []);
     } catch (err) {
-      setError(err.message || "Failed to load autonomous inbox state");
+      if (!isHiddenSessionError(err)) {
+        setError(err.message || "Failed to load autonomous inbox state");
+      } else {
+        setError("");
+      }
     } finally {
       setLoading(false);
     }
@@ -154,11 +169,17 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
         if (messagesResult.status !== "fulfilled") {
           throw runtimeResult.reason;
         }
-        setError(runtimeResult.reason?.message || "Runtime state unavailable, showing raw inbox only");
+        if (!isHiddenSessionError(runtimeResult.reason)) {
+          setError(runtimeResult.reason?.message || "Runtime state unavailable, showing raw inbox only");
+        }
       }
       setStateEvents(eventsResult || []);
     } catch (err) {
-      setError(err.message || "Failed to sync autonomous inbox state");
+      if (!isHiddenSessionError(err)) {
+        setError(err.message || "Failed to sync autonomous inbox state");
+      } else {
+        setError("");
+      }
     } finally {
       setSyncing(false);
     }

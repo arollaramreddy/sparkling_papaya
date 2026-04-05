@@ -75,6 +75,21 @@
   color: var(--text-2);
 }
 
+:root:not([data-theme="light"]) .quiz-question strong,
+:root:not([data-theme="light"]) .quiz-option span,
+:root:not([data-theme="light"]) .quiz-option input,
+:root:not([data-theme="light"]) .quiz-explanation {
+  color: var(--text-1);
+}
+
+:root:not([data-theme="light"]) .quiz-option input {
+  accent-color: #93c5fd;
+}
+
+:root:not([data-theme="light"]) .quiz-explanation {
+  color: var(--text-2);
+}
+
 :root[data-theme="light"] .quiz-option {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.96));
   border-color: #e4eaf0;

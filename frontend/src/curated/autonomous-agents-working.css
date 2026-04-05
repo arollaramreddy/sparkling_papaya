@@ -397,7 +397,7 @@
 :root[data-theme="light"] .empty-card h3,
 :root[data-theme="light"] .workflow-section h4,
 :root[data-theme="light"] .hero-stat strong {
-  color: #142133;
+  color: var(--text-surface-strong);
 }
 
 :root[data-theme="light"] .autonomous-hero p,
@@ -409,15 +409,21 @@
 :root[data-theme="light"] .hero-stat span,
 :root[data-theme="light"] .agent-time,
 :root[data-theme="light"] .agent-meta-row span {
-  color: #607086;
+  color: var(--text-surface-muted);
 }
 
 :root[data-theme="light"] .agent-clarification-input,
 :root[data-theme="light"] .settings-field select,
 :root[data-theme="light"] .agent-secondary {
   background: #ffffff;
-  color: #142133;
+  color: var(--text-surface-field);
   border-color: #d0d5dd;
+}
+
+:root[data-theme="light"] .section-tag,
+:root[data-theme="light"] .settings-tag,
+:root[data-theme="light"] .agent-pill {
+  color: var(--text-surface-tint);
 }
 
 :root[data-theme="light"] .agent-primary {

@@ -1163,7 +1163,7 @@
 :root[data-theme="light"] .score-badge,
 :root[data-theme="light"] .score-action-list span {
   background: #ffffff;
-  color: #213248;
+  color: var(--text-surface-field);
   border-color: #d7dfe8;
 }
 
@@ -1192,7 +1192,7 @@
 :root[data-theme="light"] .score-card h4,
 :root[data-theme="light"] .trigger-card strong,
 :root[data-theme="light"] .hero-metric-card strong {
-  color: #142133;
+  color: var(--text-surface-strong);
 }
 
 :root[data-theme="light"] .brand-block p,
@@ -1209,5 +1209,10 @@
 :root[data-theme="light"] .score-kicker,
 :root[data-theme="light"] .agent-time,
 :root[data-theme="light"] .agent-meta-row span {
-  color: #607086;
+  color: var(--text-surface-muted);
+}
+
+:root[data-theme="light"] .tab-button-description,
+:root[data-theme="light"] .feature-output-meta span {
+  color: var(--text-surface-subtle);
 }
