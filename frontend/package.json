@@ -10,8 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@remotion/bundler": "^4.0.445",
+    "@remotion/cli": "^4.0.445",
+    "@remotion/renderer": "^4.0.445",
+    "framer-motion": "^12.38.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.445"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

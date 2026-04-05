@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import {
+  detectLessonVisualScene,
+  getLessonVisualKeywords,
+  getSlideVisualLabels,
+} from "../lesson/visuals";
 import "./manualStudentInteraction.css";
 
 const DEFAULT_SETTINGS = {
@@ -347,7 +353,493 @@ function deadlineStatus(dateStr) {
   return null;
 }
 
+const LESSON_PANEL_VARIANTS = {
+  initial: { opacity: 0, y: 18, scale: 0.98 },
+  animate: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: { duration: 0.55, ease: [0.22, 1, 0.36, 1] },
+  },
+  exit: {
+    opacity: 0,
+    y: -12,
+    scale: 0.985,
+    transition: { duration: 0.28, ease: [0.4, 0, 1, 1] },
+  },
+};
+
+const LESSON_STAGGER_VARIANTS = {
+  initial: {},
+  animate: {
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.04,
+    },
+  },
+};
+
+const LESSON_ITEM_VARIANTS = {
+  initial: { opacity: 0, y: 12, scale: 0.96 },
+  animate: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: { duration: 0.42, ease: [0.22, 1, 0.36, 1] },
+  },
+};
+
+function renderLessonVisual(slide, lesson, reduceMotion = false) {
+  const keywords = getSlideVisualLabels(slide);
+  const bullets = (slide.bullets || []).filter(Boolean);
+  const visualSteps = (bullets.length ? bullets : [slide.example, slide.definition]).filter(Boolean).slice(0, 3);
+  const shapeLabels = (keywords.length ? keywords : visualSteps).slice(0, 4);
+  const scene = detectLessonVisualScene(slide);
+  const motionProps = reduceMotion ? {} : { variants: LESSON_ITEM_VARIANTS };
+
+  if (scene === "world-map") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-world-map"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-map-board" {...motionProps}>
+          <div className="manual-lesson-world-grid" />
+          {["Maps", "Banking", shapeLabels[0] || "Users"].map((label, index) => (
+            <motion.div
+              key={label}
+              className={`manual-lesson-world-node node-${index + 1}`}
+              animate={reduceMotion ? undefined : { scale: [1, 1.08, 1] }}
+              transition={reduceMotion ? undefined : { duration: 2.2, repeat: Infinity, delay: index * 0.45 }}
+              {...motionProps}
+            >
+              <span>{label}</span>
+            </motion.div>
+          ))}
+          <motion.div className="manual-lesson-data-packet packet-west" animate={reduceMotion ? undefined : { x: [0, 156], y: [0, 52], opacity: [0, 1, 1, 0] }} transition={reduceMotion ? undefined : { duration: 2.6, repeat: Infinity }} />
+          <motion.div className="manual-lesson-data-packet packet-east" animate={reduceMotion ? undefined : { x: [0, -146], y: [0, 38], opacity: [0, 1, 1, 0] }} transition={reduceMotion ? undefined : { duration: 2.6, repeat: Infinity, delay: 0.8 }} />
+          <motion.div className="manual-lesson-data-packet packet-south" animate={reduceMotion ? undefined : { x: [0, 52], y: [0, -128], opacity: [0, 1, 1, 0] }} transition={reduceMotion ? undefined : { duration: 2.2, repeat: Infinity, delay: 1.2 }} />
+        </motion.div>
+        <motion.div className="manual-lesson-map-caption" {...motionProps}>
+          <strong>{shapeLabels[1] || "Real-time updates"}</strong>
+          <span>{shapeLabels[2] || "Global users need fresh data instantly"}</span>
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "replication-cluster") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-replication"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-system-cluster solo" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+          <motion.div
+            className="manual-lesson-db-core"
+            animate={reduceMotion ? undefined : { scale: [1, 1.04, 1] }}
+            transition={reduceMotion ? undefined : { duration: 2.2, repeat: Infinity }}
+            {...motionProps}
+          >
+            <strong>{shapeLabels[0] || "Primary DB"}</strong>
+            <span>{shapeLabels[1] || "sync source"}</span>
+          </motion.div>
+          <motion.div className="manual-lesson-db-replica replica-a" {...motionProps}><span>{shapeLabels[2] || "Replica A"}</span></motion.div>
+          <motion.div className="manual-lesson-db-replica replica-b" {...motionProps}><span>{shapeLabels[3] || "Replica B"}</span></motion.div>
+          <motion.div className="manual-lesson-db-replica replica-c" {...motionProps}><span>Replica C</span></motion.div>
+          <motion.div className="manual-lesson-replication-wave wave-a" animate={reduceMotion ? undefined : { scale: [0.4, 1.2], opacity: [0.7, 0] }} transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity }} />
+          <motion.div className="manual-lesson-replication-wave wave-b" animate={reduceMotion ? undefined : { scale: [0.4, 1.2], opacity: [0.7, 0] }} transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, delay: 0.6 }} />
+          <motion.div className="manual-lesson-replication-wave wave-c" animate={reduceMotion ? undefined : { scale: [0.4, 1.2], opacity: [0.7, 0] }} transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, delay: 1.2 }} />
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "workload-balancing") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-workload"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-workload-source" {...motionProps}>
+          <strong>{shapeLabels[0] || "Incoming traffic"}</strong>
+        </motion.div>
+        <motion.div className="manual-lesson-workload-split" {...motionProps} />
+        <motion.div className="manual-lesson-workload-servers" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+          {["Server A", "Server B", "Server C"].map((label, index) => (
+            <motion.div key={label} className="manual-lesson-workload-server" {...motionProps}>
+              <span>{shapeLabels[index + 1] || label}</span>
+              <div className="manual-lesson-load-bar">
+                <motion.div
+                  className="manual-lesson-load-fill"
+                  animate={reduceMotion ? undefined : { scaleX: [0.55 + index * 0.1, 1, 0.65 + index * 0.08] }}
+                  transition={reduceMotion ? undefined : { duration: 2, repeat: Infinity, delay: index * 0.35 }}
+                />
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "request-routing") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-routing"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <div className="manual-lesson-process-track routing">
+          {(shapeLabels.length ? shapeLabels : ["Client", "API", "Cache", "Database"]).slice(0, 4).map((item, index, list) => (
+            <motion.div key={item} className="manual-lesson-process-step" {...motionProps}>
+              <div className={`manual-lesson-process-node node-${index + 1}`}>{item}</div>
+              {index < list.length - 1 ? <div className="manual-lesson-process-link" /> : null}
+            </motion.div>
+          ))}
+          <div className="manual-lesson-process-token" />
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "distributed-systems") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-system"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-system-world" {...motionProps}>
+          <div className="manual-lesson-world-grid" />
+          <motion.div
+            className="manual-lesson-world-node node-west"
+            animate={reduceMotion ? undefined : { scale: [1, 1.08, 1] }}
+            transition={reduceMotion ? undefined : { duration: 2.4, repeat: Infinity }}
+            {...motionProps}
+          >
+            <span>Maps</span>
+          </motion.div>
+          <motion.div
+            className="manual-lesson-world-node node-east"
+            animate={reduceMotion ? undefined : { scale: [1, 1.08, 1] }}
+            transition={reduceMotion ? undefined : { duration: 2.4, repeat: Infinity, delay: 0.6 }}
+            {...motionProps}
+          >
+            <span>Banking</span>
+          </motion.div>
+          <motion.div
+            className="manual-lesson-world-node node-south"
+            animate={reduceMotion ? undefined : { scale: [1, 1.08, 1] }}
+            transition={reduceMotion ? undefined : { duration: 2.4, repeat: Infinity, delay: 1.2 }}
+            {...motionProps}
+          >
+            <span>Users</span>
+          </motion.div>
+          <motion.div className="manual-lesson-world-link link-west" {...motionProps} />
+          <motion.div className="manual-lesson-world-link link-east" {...motionProps} />
+          <motion.div className="manual-lesson-world-link link-south" {...motionProps} />
+          <motion.div
+            className="manual-lesson-data-packet packet-west"
+            animate={reduceMotion ? undefined : { x: [0, 148], y: [0, 68], opacity: [0, 1, 1, 0] }}
+            transition={reduceMotion ? undefined : { duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
+          />
+          <motion.div
+            className="manual-lesson-data-packet packet-east"
+            animate={reduceMotion ? undefined : { x: [0, -156], y: [0, 40], opacity: [0, 1, 1, 0] }}
+            transition={reduceMotion ? undefined : { duration: 2.8, repeat: Infinity, delay: 0.8, ease: "easeInOut" }}
+          />
+          <motion.div
+            className="manual-lesson-data-packet packet-south"
+            animate={reduceMotion ? undefined : { x: [0, 42], y: [0, -118], opacity: [0, 1, 1, 0] }}
+            transition={reduceMotion ? undefined : { duration: 2.4, repeat: Infinity, delay: 1.3, ease: "easeInOut" }}
+          />
+        </motion.div>
+
+        <motion.div className="manual-lesson-system-cluster" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+          <motion.div
+            className="manual-lesson-db-core"
+            animate={reduceMotion ? undefined : { scale: [1, 1.04, 1], boxShadow: ["0 20px 44px rgba(2, 6, 23, 0.32)", "0 26px 60px rgba(34, 211, 238, 0.24)", "0 20px 44px rgba(2, 6, 23, 0.32)"] }}
+            transition={reduceMotion ? undefined : { duration: 2.4, repeat: Infinity }}
+            {...motionProps}
+          >
+            <strong>Distributed DB</strong>
+            <span>shared state</span>
+          </motion.div>
+          <motion.div className="manual-lesson-db-replica replica-a" {...motionProps}>
+            <span>Replica A</span>
+          </motion.div>
+          <motion.div className="manual-lesson-db-replica replica-b" {...motionProps}>
+            <span>Replica B</span>
+          </motion.div>
+          <motion.div className="manual-lesson-db-replica replica-c" {...motionProps}>
+            <span>Replica C</span>
+          </motion.div>
+          <motion.div className="manual-lesson-db-pulse pulse-a" {...motionProps} />
+          <motion.div className="manual-lesson-db-pulse pulse-b" {...motionProps} />
+          <motion.div className="manual-lesson-db-pulse pulse-c" {...motionProps} />
+          <motion.div
+            className="manual-lesson-replication-wave wave-a"
+            animate={reduceMotion ? undefined : { scale: [0.4, 1.2], opacity: [0.7, 0] }}
+            transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity }}
+          />
+          <motion.div
+            className="manual-lesson-replication-wave wave-b"
+            animate={reduceMotion ? undefined : { scale: [0.4, 1.2], opacity: [0.7, 0] }}
+            transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, delay: 0.6 }}
+          />
+          <motion.div
+            className="manual-lesson-replication-wave wave-c"
+            animate={reduceMotion ? undefined : { scale: [0.4, 1.2], opacity: [0.7, 0] }}
+            transition={reduceMotion ? undefined : { duration: 1.8, repeat: Infinity, delay: 1.2 }}
+          />
+        </motion.div>
+
+        <motion.div className="manual-lesson-system-load" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+          {["Traffic", "Reads", "Writes"].map((label, index) => (
+            <motion.div key={label} className={`manual-lesson-load-lane lane-${index + 1}`} {...motionProps}>
+              <span>{label}</span>
+              <div className="manual-lesson-load-bar">
+                <motion.div
+                  className="manual-lesson-load-fill"
+                  animate={reduceMotion ? undefined : { scaleX: [0.62, 1, 0.7] }}
+                  transition={reduceMotion ? undefined : { duration: 2.2, repeat: Infinity, delay: index * 0.4 }}
+                />
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "comparison") {
+    const leftItems = shapeLabels.slice(0, 2);
+    const rightItems = (shapeLabels.slice(2, 4).length ? shapeLabels.slice(2, 4) : ["Contrast", "Outcome"]);
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-compare"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-compare-column left" {...motionProps}>
+          <span className="manual-lesson-compare-label">Side A</span>
+          {leftItems.map((item) => (
+            <motion.div key={item} className="manual-lesson-compare-card" {...motionProps}>
+              {item}
+            </motion.div>
+          ))}
+        </motion.div>
+        <motion.div className="manual-lesson-compare-axis" {...motionProps}>
+          <span>vs</span>
+        </motion.div>
+        <motion.div className="manual-lesson-compare-column right" {...motionProps}>
+          <span className="manual-lesson-compare-label">Side B</span>
+          {rightItems.map((item) => (
+            <motion.div key={item} className="manual-lesson-compare-card" {...motionProps}>
+              {item}
+            </motion.div>
+          ))}
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "process-flow") {
+    const flowItems = (shapeLabels.length ? shapeLabels : ["Input", "Process", "Output"]).slice(0, 4);
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-process"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <div className="manual-lesson-process-track">
+          {flowItems.map((item, index) => (
+            <motion.div key={item} className="manual-lesson-process-step" {...motionProps}>
+              <div className={`manual-lesson-process-node node-${index + 1}`}>{item}</div>
+              {index < flowItems.length - 1 ? <div className="manual-lesson-process-link" /> : null}
+            </motion.div>
+          ))}
+          <div className="manual-lesson-process-token" />
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (scene === "network") {
+    const nodeLabels = (shapeLabels.length ? shapeLabels : ["Client", "Server", "Cache", "API"]).slice(0, 4);
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-network"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-network-hub" {...motionProps}>
+          <strong>{nodeLabels[1] || "Server"}</strong>
+          <span>central service</span>
+        </motion.div>
+        {nodeLabels.map((label, index) => (
+          <motion.div
+            key={`${label}-${index}`}
+            className={`manual-lesson-network-node network-node-${index + 1}`}
+            {...motionProps}
+          >
+            {label}
+          </motion.div>
+        ))}
+        <div className="manual-lesson-network-connector connector-1" />
+        <div className="manual-lesson-network-connector connector-2" />
+        <div className="manual-lesson-network-connector connector-3" />
+        <div className="manual-lesson-network-ping ping-1" />
+        <div className="manual-lesson-network-ping ping-2" />
+      </motion.div>
+    );
+  }
+
+  if (slide.type === "title") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-title"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <div className="manual-lesson-orbit-shell">
+          <span className="manual-lesson-orbit-ring ring-a" />
+          <span className="manual-lesson-orbit-ring ring-b" />
+          <motion.span className="manual-lesson-orbit-core" {...motionProps}>
+            {lesson.slides.length}
+          </motion.span>
+          {keywords.slice(0, 3).map((keyword, index) => (
+            <motion.span
+              key={`${keyword}-${index}`}
+              className={`manual-lesson-orbit-node node-${index + 1}`}
+              {...motionProps}
+            >
+              {keyword}
+            </motion.span>
+          ))}
+        </div>
+        <div className="manual-lesson-visual-stats">
+          <motion.div className="manual-lesson-visual-stat" {...motionProps}>
+            <strong>{lesson.estimated_minutes || 0}m</strong>
+            <span>guided pace</span>
+          </motion.div>
+          <motion.div className="manual-lesson-visual-stat" {...motionProps}>
+            <strong>{lesson.subject || "Topic"}</strong>
+            <span>focus area</span>
+          </motion.div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (slide.type === "definition") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-definition"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-concept-card" {...motionProps}>
+          <span className="manual-lesson-concept-label">Concept</span>
+          <strong>{slide.term || slide.heading || "Key idea"}</strong>
+          <p>{slide.definition || "Important idea explained visually."}</p>
+        </motion.div>
+        <div className="manual-lesson-shape-board definition-board">
+          <motion.div className="manual-lesson-shape shape-pill shape-primary" {...motionProps}>
+            <span>{slide.term || keywords[0] || "Idea"}</span>
+          </motion.div>
+          <motion.div className="manual-lesson-shape-link" {...motionProps} />
+          <motion.div className="manual-lesson-shape shape-rect shape-secondary" {...motionProps}>
+            <span>{shapeLabels[1] || "Meaning"}</span>
+          </motion.div>
+          <motion.div className="manual-lesson-shape-link vertical" {...motionProps} />
+          {(slide.example || keywords[2]) ? (
+            <motion.div className="manual-lesson-example-bubble" {...motionProps}>
+              <span>Example</span>
+              <strong>{slide.example || keywords[2]}</strong>
+            </motion.div>
+          ) : null}
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (slide.type === "example") {
+    return (
+      <motion.div
+        className="manual-lesson-visual manual-lesson-visual-example"
+        aria-hidden="true"
+        {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+      >
+        <motion.div className="manual-lesson-example-track" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+          {visualSteps.map((step, index) => (
+            <motion.div
+              key={`${step}-${index}`}
+              className="manual-lesson-example-step"
+              style={{ "--lesson-step-delay": `${index * 180}ms` }}
+              {...motionProps}
+            >
+              <span>{index + 1}</span>
+              <strong>{step}</strong>
+            </motion.div>
+          ))}
+        </motion.div>
+        <motion.div className="manual-lesson-object-row" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+          {shapeLabels.slice(0, 3).map((label, index) => (
+            <motion.div
+              key={`${label}-${index}`}
+              className={`manual-lesson-object object-${index + 1}`}
+              style={{ "--lesson-step-delay": `${index * 180}ms` }}
+              {...motionProps}
+            >
+              <span className="manual-lesson-object-core">{label}</span>
+            </motion.div>
+          ))}
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      className="manual-lesson-visual manual-lesson-visual-summary"
+      aria-hidden="true"
+      {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}
+    >
+      <motion.div className="manual-lesson-shape-flow" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+        {shapeLabels.slice(0, 3).map((item, index) => (
+          <motion.div key={`${item}-flow-${index}`} className="manual-lesson-flow-step" {...motionProps}>
+            <motion.div className={`manual-lesson-shape flow-shape-${index + 1}`} {...motionProps}>
+              <span>{item}</span>
+            </motion.div>
+            {index < Math.min(shapeLabels.slice(0, 3).length - 1, 2) ? (
+              <motion.div className="manual-lesson-flow-arrow" {...motionProps} />
+            ) : null}
+          </motion.div>
+        ))}
+      </motion.div>
+      <motion.div className="manual-lesson-summary-grid" {...(reduceMotion ? {} : { variants: LESSON_STAGGER_VARIANTS })}>
+        {shapeLabels.map((item, index) => (
+          <motion.div
+            key={`${item}-${index}`}
+            className="manual-lesson-summary-chip"
+            style={{ "--lesson-step-delay": `${index * 140}ms` }}
+            {...motionProps}
+          >
+            {item}
+          </motion.div>
+        ))}
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
+  const reduceMotion = useReducedMotion();
   const [slideIndex, setSlideIndex] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [speechError, setSpeechError] = useState("");
@@ -355,18 +847,20 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
   const [audioLoading, setAudioLoading] = useState({});
   const [muted, setMuted] = useState(false);
   const audioRef = useRef(null);
+  const advanceTimeoutRef = useRef(null);
 
   const slide = lesson.slides[slideIndex] || {};
   const isFirst = slideIndex === 0;
   const isLast = slideIndex === lesson.slides.length - 1;
   const progress = ((slideIndex + 1) / lesson.slides.length) * 100;
+  const currentAudioReady = Boolean(audioUrls[slide.id]);
+  const currentAudioLoading = Boolean(audioLoading[slide.id]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function ensureAudioForSlide(targetSlide) {
-      if (!targetSlide?.id || !targetSlide?.narration) return;
-      if (audioUrls[targetSlide.id] || audioLoading[targetSlide.id]) return;
+  const ensureAudioForSlide = useCallback(
+    async (targetSlide) => {
+      if (!targetSlide?.id || !targetSlide?.narration) return null;
+      if (audioUrls[targetSlide.id]) return audioUrls[targetSlide.id];
+      if (audioLoading[targetSlide.id]) return null;
 
       setAudioLoading((current) => ({ ...current, [targetSlide.id]: true }));
 
@@ -389,30 +883,52 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
           throw new Error(data.error || "Failed to generate lesson audio");
         }
 
-        if (!cancelled) {
-          setAudioUrls((current) => ({ ...current, [targetSlide.id]: data.audioUrl }));
-          setSpeechError("");
-        }
+        setAudioUrls((current) => ({ ...current, [targetSlide.id]: data.audioUrl }));
+        setSpeechError("");
+        return data.audioUrl;
       } catch (error) {
-        if (!cancelled) {
-          setSpeechError(error.message || "Failed to load lesson audio");
-        }
+        setSpeechError(error.message || "Failed to load lesson audio");
+        return null;
       } finally {
-        if (!cancelled) {
-          setAudioLoading((current) => ({ ...current, [targetSlide.id]: false }));
-        }
+        setAudioLoading((current) => ({ ...current, [targetSlide.id]: false }));
       }
-    }
+    },
+    [apiBase, audioLoading, audioUrls, lesson.title]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
 
     const narratedSlides = (lesson.slides || []).filter((item) => item?.id && item?.narration);
     narratedSlides.forEach((targetSlide) => {
-      ensureAudioForSlide(targetSlide);
+      ensureAudioForSlide(targetSlide).catch(() => {});
     });
 
     return () => {
       cancelled = true;
     };
-  }, [apiBase, audioLoading, audioUrls, lesson.slides, lesson.title]);
+  }, [ensureAudioForSlide, lesson.slides]);
+
+  const stopPlayback = useCallback(
+    ({ resetTime = false } = {}) => {
+      if (advanceTimeoutRef.current) {
+        clearTimeout(advanceTimeoutRef.current);
+        advanceTimeoutRef.current = null;
+      }
+
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.onended = null;
+        if (resetTime) {
+          audio.currentTime = 0;
+        }
+      }
+
+      setSpeaking(false);
+    },
+    []
+  );
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -439,7 +955,10 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
       if (isLast) {
         setSpeaking(false);
       } else {
-        setTimeout(() => setSlideIndex((current) => current + 1), 700);
+        advanceTimeoutRef.current = setTimeout(() => {
+          advanceTimeoutRef.current = null;
+          setSlideIndex((current) => current + 1);
+        }, 700);
       }
     }
 
@@ -448,26 +967,32 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
     audio.onended = handleEnded;
 
     return () => {
+      if (advanceTimeoutRef.current) {
+        clearTimeout(advanceTimeoutRef.current);
+        advanceTimeoutRef.current = null;
+      }
       audio.pause();
       audio.onended = null;
     };
   }, [audioUrls, isLast, muted, slide.id, speaking]);
 
+  useEffect(() => () => stopPlayback({ resetTime: true }), [stopPlayback]);
+
   async function toggleSpeaking() {
     if (speaking) {
-      audioRef.current?.pause();
-      setSpeaking(false);
+      stopPlayback();
     } else {
       setSpeechError("");
-      const currentSrc = audioUrls[slide.id];
+      let currentSrc = audioUrls[slide.id];
       if (!currentSrc) {
-        setSpeaking(true);
+        currentSrc = await ensureAudioForSlide(slide);
+      }
+      if (!currentSrc) {
         return;
       }
 
       const audio = audioRef.current;
       if (!audio) {
-        setSpeaking(true);
         return;
       }
 
@@ -485,7 +1010,7 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
   }
 
   function closePlayer() {
-    audioRef.current?.pause();
+    stopPlayback({ resetTime: true });
     onClose?.();
   }
 
@@ -505,10 +1030,23 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
         </div>
 
         <div className="manual-lesson-stage">
-          <div className={`manual-lesson-slide ${slide.type}`}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={slide.id || slideIndex}
+              className={`manual-lesson-slide ${slide.type}`}
+              initial={reduceMotion ? false : "initial"}
+              animate={reduceMotion ? undefined : "animate"}
+              exit={reduceMotion ? undefined : "exit"}
+              variants={reduceMotion ? undefined : LESSON_PANEL_VARIANTS}
+            >
             {!speaking ? (
-              <button className="manual-lesson-stage-play" onClick={toggleSpeaking} type="button">
-                ▶ Play lesson
+              <button
+                className="manual-lesson-stage-play"
+                onClick={toggleSpeaking}
+                type="button"
+                disabled={currentAudioLoading}
+              >
+                {currentAudioLoading ? "Preparing narration..." : "▶ Play lesson"}
               </button>
             ) : null}
             {slide.type === "title" ? (
@@ -519,6 +1057,7 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
                 <div className="manual-lesson-meta">
                   {lesson.slides.length} slides · ~{lesson.estimated_minutes} min
                 </div>
+                {renderLessonVisual(slide, lesson, reduceMotion)}
               </>
             ) : (
               <>
@@ -539,12 +1078,14 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
                     ))}
                   </ul>
                 )}
+                {renderLessonVisual(slide, lesson, reduceMotion)}
               </>
             )}
-          </div>
+            </motion.div>
+          </AnimatePresence>
         </div>
 
-        {speaking && !audioUrls[slide.id] && !speechError ? (
+        {!currentAudioReady && currentAudioLoading && !speechError ? (
           <div className="manual-note">Preparing narration...</div>
         ) : null}
         {speechError ? <div className="manual-note warning">{speechError}</div> : null}
@@ -560,7 +1101,12 @@ function LessonPlayer({ lesson, onClose, inline = false, apiBase }) {
             >
               ⏮
             </button>
-            <button className="manual-lesson-control-btn play" onClick={toggleSpeaking} aria-label="Play lesson">
+            <button
+              className="manual-lesson-control-btn play"
+              onClick={toggleSpeaking}
+              aria-label="Play lesson"
+              disabled={!speaking && currentAudioLoading}
+            >
               {speaking ? "⏸" : "▶"}
             </button>
             <button
@@ -1134,6 +1680,41 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     }
   }
 
+  async function handleGenerateLessonVideo(file) {
+    const fileId = String(file.id);
+    const job = lessonJobs[fileId];
+    if (!job?.lesson) return;
+
+    updateLessonJob(fileId, {
+      videoLoading: true,
+      videoError: "",
+      videoStatus: "Generating AI video...",
+    });
+
+    try {
+      const data = await apiFetchJson("/render-lesson-video", {
+        method: "POST",
+        body: JSON.stringify({
+          title: `${job.lesson.title || file.display_name} video`,
+          lesson: job.lesson,
+        }),
+      });
+
+      updateLessonJob(fileId, {
+        videoLoading: false,
+        videoError: "",
+        videoStatus: "AI video ready",
+        videoUrl: data.videoUrl,
+      });
+    } catch (error) {
+      updateLessonJob(fileId, {
+        videoLoading: false,
+        videoError: error.message || "Video generation failed",
+        videoStatus: "Video generation failed",
+      });
+    }
+  }
+
   function renderLessonPanel(file) {
     const job = lessonJobs[String(file.id)];
     if (!job) return null;
@@ -1193,6 +1774,19 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
                 Regenerate
               </button>
             ) : null}
+            {job.lesson ? (
+              <button
+                className="manual-btn"
+                onClick={() => handleGenerateLessonVideo(file)}
+                disabled={job.loading || job.videoLoading}
+              >
+                {job.videoLoading
+                  ? "Rendering video..."
+                  : job.videoUrl
+                    ? "Re-render video"
+                    : "Render video"}
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -1214,6 +1808,7 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
         ) : null}
 
         {job.error ? <div className="manual-note error">{job.error}</div> : null}
+        {job.videoError ? <div className="manual-note error">{job.videoError}</div> : null}
 
         {job.lesson ? (
           <>
@@ -1223,6 +1818,10 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
             </div>
             {job.lesson.slides?.[0]?.narration ? (
               <div className="manual-lesson-script">{job.lesson.slides[0].narration}</div>
+            ) : null}
+            {job.videoStatus ? <div className="manual-lesson-meta">{job.videoStatus}</div> : null}
+            {job.videoUrl ? (
+              <video className="manual-generated-video" src={job.videoUrl} controls preload="metadata" />
             ) : null}
             {isActiveLesson ? <LessonPlayer lesson={job.lesson} inline apiBase={apiBase} /> : null}
           </>

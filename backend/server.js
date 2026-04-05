@@ -27,6 +27,14 @@ const {
   generateLessonSlideAudio,
 } = require("./lib/lesson-audio");
 const {
+  ensureVeoVideoDir,
+  generateVeoVideo,
+} = require("./lib/veo-video");
+const {
+  ensureLessonVideoDir,
+  renderLessonVideo,
+} = require("./lib/remotion-video");
+const {
   assessReplyContext,
   buildReplyDraftPrompt,
   classifyMessageIntent,
@@ -60,6 +68,8 @@ app.use(cors({
 }));
 app.use(express.json());
 ensureLessonAudioDir();
+ensureVeoVideoDir();
+ensureLessonVideoDir();
 app.use("/generated", express.static(GENERATED_ROOT));
 
 function normalizeCanvasApiBaseUrl(rawUrl) {
@@ -817,6 +827,86 @@ function normalizePlanPreferences(preferences = {}) {
       ? preferences.selectedModuleIds.map(String)
       : [],
   };
+}
+
+function deriveLessonVisualScene(slide = {}) {
+  const source = [
+    slide.heading,
+    slide.term,
+    slide.subheading,
+    slide.definition,
+    slide.example,
+    slide.narration,
+    ...(slide.bullets || []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/(google maps|maps|world|global|country|city|location|traffic|banking balance|banking)/.test(source)) {
+    return "world-map";
+  }
+
+  if (/(replica|replicas|replication|copy|copies|synchroniz|consisten|sync)/.test(source)) {
+    return "replication-cluster";
+  }
+
+  if (/(workload|load balancing|balance the load|reads|writes|throughput|hotspot|scale out)/.test(source)) {
+    return "workload-balancing";
+  }
+
+  if (/(request|response|route|routing|query|api call|client request|serve)/.test(source)) {
+    return "request-routing";
+  }
+
+  if (
+    /(distributed|database|replica|replication|workload|traffic|banking|google maps|maps|real[- ]?time|global)/.test(
+      source
+    )
+  ) {
+    return "distributed-systems";
+  }
+
+  if (/(compare|comparison|versus|vs\\.?|difference|tradeoff|instead of|rather than)/.test(source)) {
+    return "comparison";
+  }
+
+  if (/(request|response|workflow|pipeline|process|step|sequence|flow|lifecycle|how it works)/.test(source)) {
+    return "process-flow";
+  }
+
+  if (/(client|server|network|node|packet|api|service|browser|cache)/.test(source)) {
+    return "network";
+  }
+
+  return slide.type || "concept";
+}
+
+function deriveLessonVisualLabels(slide = {}) {
+  if (Array.isArray(slide.visual_labels) && slide.visual_labels.length) {
+    return slide.visual_labels.filter(Boolean).slice(0, 6);
+  }
+
+  const source = [
+    slide.heading,
+    slide.term,
+    slide.subheading,
+    slide.definition,
+    slide.example,
+    slide.narration,
+    ...(slide.bullets || []),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return Array.from(
+    new Set(
+      source
+        .split(/[^A-Za-z0-9]+/)
+        .map((part) => part.trim())
+        .filter((part) => part.length > 4)
+    )
+  ).slice(0, 6);
 }
 
 async function resolveCourseSyllabus(courseId, accessToken) {
@@ -3718,6 +3808,8 @@ Return ONLY valid JSON — no markdown, no explanation, just the JSON object:
       "type": "title",
       "heading": "Lesson Title",
       "subheading": "What students will learn",
+      "visual_scene": "title",
+      "visual_labels": ["Topic", "Goal"],
       "narration": "Natural 2-3 sentence spoken welcome. Should sound like a teacher, not a robot.",
       "duration_seconds": 7
     },
@@ -3726,6 +3818,8 @@ Return ONLY valid JSON — no markdown, no explanation, just the JSON object:
       "type": "concept",
       "heading": "Concept Name",
       "bullets": ["Key point one", "Key point two", "Key point three"],
+      "visual_scene": "world-map | replication-cluster | workload-balancing | request-routing | comparison | process-flow | network | concept",
+      "visual_labels": ["short label 1", "short label 2", "short label 3", "short label 4"],
       "narration": "Natural 3-5 sentence spoken explanation. Flow like a professor speaking to students, don't just read the bullets. Include why it matters and one quick intuitive example or analogy.",
       "duration_seconds": 20
     },
@@ -3735,6 +3829,8 @@ Return ONLY valid JSON — no markdown, no explanation, just the JSON object:
       "term": "Technical Term",
       "definition": "Clear one-sentence definition.",
       "example": "Concrete real-world example (optional)",
+      "visual_scene": "world-map | replication-cluster | workload-balancing | request-routing | comparison | process-flow | network | definition",
+      "visual_labels": ["short label 1", "short label 2", "short label 3"],
       "narration": "Natural 2-3 sentence spoken explanation including why this term matters and where a student would see it in practice.",
       "duration_seconds": 14
     },
@@ -3743,6 +3839,8 @@ Return ONLY valid JSON — no markdown, no explanation, just the JSON object:
       "type": "example",
       "heading": "Example or Application",
       "bullets": ["Step or detail one", "Step or detail two", "Step or detail three"],
+      "visual_scene": "world-map | replication-cluster | workload-balancing | request-routing | comparison | process-flow | network | example",
+      "visual_labels": ["short label 1", "short label 2", "short label 3", "short label 4"],
       "narration": "Walk through the example naturally, 3-4 sentences. End with a quick reflective question or check-in.",
       "duration_seconds": 18
     },
@@ -3751,6 +3849,8 @@ Return ONLY valid JSON — no markdown, no explanation, just the JSON object:
       "type": "summary",
       "heading": "Key Takeaways",
       "bullets": ["Most important insight 1", "Most important insight 2", "Most important insight 3", "Most important insight 4"],
+      "visual_scene": "world-map | replication-cluster | workload-balancing | request-routing | comparison | process-flow | network | summary",
+      "visual_labels": ["short label 1", "short label 2", "short label 3", "short label 4"],
       "narration": "Natural 2-3 sentence wrap-up. Tell students what to remember.",
       "duration_seconds": 16
     }
@@ -3765,6 +3865,18 @@ Rules:
 - At least half of the non-title slides should contain either a concrete example, application, worked step, scenario, or check-for-understanding moment
 - Narration sounds NATURAL when spoken aloud — conversational, not bullet-reading
 - Narration should teach through examples instead of repeating slide text
+- visual_scene and visual_labels must be chosen from what the narration is actually saying, not generic slide type defaults
+- Use more specific scenes instead of repeating one distributed database visual across the whole lesson
+- If narration mentions maps, live traffic, banking, world-wide apps, cities, or global data, use "world-map"
+- If narration focuses on replicas, synchronization, consistency, or copies of data, use "replication-cluster"
+- If narration focuses on spreading reads, writes, traffic, throughput, balancing, or scale-out, use "workload-balancing"
+- If narration explains requests, routing, queries, or serving data paths, use "request-routing"
+- If narration explains two sides, tradeoffs, or contrasts, use "comparison"
+- If narration walks through steps, requests, workflows, or pipelines, use "process-flow"
+- If narration talks about clients, servers, APIs, networks, caches, or services, use "network"
+- visual_labels should be 2-4 short nouns or phrases taken from the narration and source content
+- Use at least 3 distinct visual_scene values across the lesson when the material supports it
+- Do not repeat the same visual_scene for more than 2 slides in a row unless the narration is truly continuing the exact same visual idea
 - Bullets: max 4 per slide, short phrases only (5-8 words each)
 - duration_seconds ≈ narration word count ÷ 2.3
 - Focus on the most important ideas from the material
@@ -3781,6 +3893,14 @@ ${truncated}`
     if (!jsonMatch) throw new Error("Could not parse lesson JSON from response");
 
     const lesson = JSON.parse(jsonMatch[0]);
+    lesson.slides = Array.isArray(lesson.slides)
+      ? lesson.slides.map((slide, index) => ({
+          ...slide,
+          id: slide.id ?? index + 1,
+          visual_scene: slide.visual_scene || deriveLessonVisualScene(slide),
+          visual_labels: deriveLessonVisualLabels(slide),
+        }))
+      : [];
     res.json(lesson);
   } catch (err) {
     res.status(500).json({ error: `Lesson generation failed: ${err.message}` });
@@ -3808,6 +3928,53 @@ app.post("/api/generate-lesson-audio", async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: `Lesson audio generation failed: ${err.message}` });
+  }
+});
+
+app.post("/api/generate-veo-video", async (req, res) => {
+  const { title, prompt, aspectRatio } = req.body || {};
+  if (!prompt) {
+    return res.status(400).json({ error: "prompt is required" });
+  }
+
+  try {
+    const video = await generateVeoVideo({
+      title: title || "lesson-video",
+      prompt,
+      backendUrl: BACKEND_URL,
+      aspectRatio: aspectRatio || "16:9",
+    });
+
+    res.json({
+      success: true,
+      videoUrl: video.url,
+      fileName: video.fileName,
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Video generation failed: ${err.message}` });
+  }
+});
+
+app.post("/api/render-lesson-video", async (req, res) => {
+  const { title, lesson } = req.body || {};
+  if (!lesson?.slides?.length) {
+    return res.status(400).json({ error: "lesson with slides is required" });
+  }
+
+  try {
+    const video = await renderLessonVideo({
+      title: title || lesson.title || "lesson-video",
+      lesson,
+      backendUrl: BACKEND_URL,
+    });
+
+    res.json({
+      success: true,
+      videoUrl: video.url,
+      fileName: video.fileName,
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Local video render failed: ${err.message}` });
   }
 });
 

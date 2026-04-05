@@ -6,7 +6,7 @@ const ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech";
 const GENERATED_ROOT = path.join(__dirname, "..", "generated");
 const LESSON_AUDIO_DIR = path.join(GENERATED_ROOT, "lesson-audio");
 const DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
-const DEFAULT_MODEL_ID = "eleven_multilingual_v2";
+const DEFAULT_MODEL_ID = "eleven_flash_v2_5";
 
 function ensureLessonAudioDir() {
   fs.mkdirSync(LESSON_AUDIO_DIR, { recursive: true });
@@ -65,25 +65,27 @@ async function generateLessonSlideAudio({
   const filePath = path.join(LESSON_AUDIO_DIR, fileName);
 
   if (!fs.existsSync(filePath)) {
-    const response = await fetch(`${ELEVENLABS_API_URL}/${voiceId}`, {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text: normalizedText,
-        model_id: modelId,
-        output_format: "mp3_44100_128",
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.8,
-          style: 0.3,
-          use_speaker_boost: true,
+    const response = await fetch(
+      `${ELEVENLABS_API_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
         },
-      }),
-    });
+        body: JSON.stringify({
+          text: normalizedText,
+          model_id: modelId,
+          voice_settings: {
+            stability: 0.45,
+            similarity_boost: 0.75,
+            style: 0.25,
+            use_speaker_boost: true,
+          },
+        }),
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");

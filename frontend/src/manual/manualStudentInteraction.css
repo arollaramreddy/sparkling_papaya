@@ -1479,6 +1479,15 @@
   color: #314155;
 }
 
+.manual-generated-video {
+  width: 100%;
+  margin-top: 14px;
+  border-radius: 20px;
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.28);
+}
+
 .manual-table-wrap {
   overflow: auto;
 }
@@ -1737,6 +1746,1149 @@
   font-style: italic;
 }
 
+.manual-lesson-visual {
+  margin-top: 24px;
+  position: relative;
+}
+
+.manual-lesson-visual-title {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px);
+  gap: 18px;
+  align-items: center;
+}
+
+.manual-lesson-orbit-shell {
+  position: relative;
+  min-height: 220px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at center, rgba(34, 211, 238, 0.16), transparent 42%),
+    linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(236, 72, 153, 0.12));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+}
+
+.manual-lesson-orbit-ring,
+.manual-lesson-orbit-core,
+.manual-lesson-orbit-node,
+.manual-lesson-concept-card,
+.manual-lesson-example-bubble,
+.manual-lesson-example-step,
+.manual-lesson-summary-chip {
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+
+.manual-lesson-orbit-ring {
+  position: absolute;
+  inset: 50%;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.26);
+  transform: translate(-50%, -50%);
+}
+
+.manual-lesson-orbit-ring.ring-a {
+  width: 74%;
+  height: 74%;
+  animation: manualLessonOrbitSpin 14s linear infinite;
+}
+
+.manual-lesson-orbit-ring.ring-b {
+  width: 48%;
+  height: 48%;
+  border-color: rgba(244, 114, 182, 0.22);
+  animation: manualLessonOrbitSpinReverse 10s linear infinite;
+}
+
+.manual-lesson-orbit-core {
+  position: absolute;
+  inset: 50%;
+  width: 88px;
+  height: 88px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.9), rgba(168, 85, 247, 0.92));
+  color: #fff;
+  font-size: 1.5rem;
+  font-weight: 800;
+  transform: translate(-50%, -50%);
+  animation: manualLessonPulse 2.8s ease-in-out infinite;
+}
+
+.manual-lesson-orbit-node {
+  position: absolute;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  animation: manualLessonFloat 3.8s ease-in-out infinite;
+}
+
+.manual-lesson-orbit-node.node-1 {
+  top: 18%;
+  left: 12%;
+}
+
+.manual-lesson-orbit-node.node-2 {
+  right: 10%;
+  top: 24%;
+  animation-delay: 0.7s;
+}
+
+.manual-lesson-orbit-node.node-3 {
+  bottom: 16%;
+  left: 20%;
+  animation-delay: 1.3s;
+}
+
+.manual-lesson-visual-stats {
+  display: grid;
+  gap: 12px;
+}
+
+.manual-lesson-visual-stat,
+.manual-lesson-concept-card,
+.manual-lesson-example-bubble,
+.manual-lesson-example-step,
+.manual-lesson-summary-chip {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.64);
+  backdrop-filter: blur(16px);
+}
+
+.manual-lesson-visual-stat {
+  padding: 16px 18px;
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manual-lesson-visual-stat strong,
+.manual-lesson-concept-card strong,
+.manual-lesson-example-bubble strong {
+  color: #f8fafc;
+}
+
+.manual-lesson-visual-stat span,
+.manual-lesson-concept-card span,
+.manual-lesson-example-bubble span {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.manual-lesson-visual-definition {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.8fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.manual-lesson-visual-system {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(220px, 1fr) minmax(180px, 0.9fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.manual-lesson-visual-compare,
+.manual-lesson-visual-process,
+.manual-lesson-visual-network {
+  position: relative;
+  min-height: 240px;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.64);
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+}
+
+.manual-lesson-visual-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+}
+
+.manual-lesson-compare-column {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+}
+
+.manual-lesson-compare-label {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manual-lesson-compare-card {
+  min-height: 72px;
+  border-radius: 20px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #f8fafc;
+  font-weight: 700;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.3), rgba(6, 182, 212, 0.24));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.manual-lesson-compare-column.right .manual-lesson-compare-card {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.3), rgba(236, 72, 153, 0.24));
+}
+
+.manual-lesson-compare-axis {
+  align-self: center;
+  justify-self: center;
+  width: 88px;
+  height: 88px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.9), rgba(244, 114, 182, 0.82));
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.3);
+}
+
+.manual-lesson-visual-process {
+  padding: 24px 20px;
+}
+
+.manual-lesson-process-track {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: center;
+  min-height: 190px;
+}
+
+.manual-lesson-process-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.manual-lesson-process-node {
+  min-height: 92px;
+  width: 100%;
+  border-radius: 22px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #f8fafc;
+  font-weight: 700;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.3), rgba(6, 182, 212, 0.22));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.manual-lesson-process-node.node-2 {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(168, 85, 247, 0.24));
+}
+
+.manual-lesson-process-node.node-3 {
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.28), rgba(251, 191, 36, 0.22));
+}
+
+.manual-lesson-process-node.node-4 {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.26), rgba(251, 191, 36, 0.22));
+}
+
+.manual-lesson-process-link {
+  flex: 0 0 28px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.78), rgba(168, 85, 247, 0.72));
+  position: relative;
+}
+
+.manual-lesson-process-link::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: -4px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid rgba(168, 85, 247, 0.84);
+}
+
+.manual-lesson-process-token {
+  position: absolute;
+  top: 34px;
+  left: 2%;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #22d3ee;
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.9);
+  animation: manualLessonTokenTravel 4.5s ease-in-out infinite;
+}
+
+.manual-lesson-network-hub {
+  position: absolute;
+  inset: 50%;
+  width: 132px;
+  height: 132px;
+  transform: translate(-50%, -50%);
+  border-radius: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.86), rgba(6, 182, 212, 0.82));
+  color: #fff;
+  box-shadow: 0 20px 44px rgba(2, 6, 23, 0.32);
+}
+
+.manual-lesson-network-hub span {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.manual-lesson-network-node {
+  position: absolute;
+  min-width: 92px;
+  min-height: 52px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #f8fafc;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.manual-lesson-network-node.network-node-1 {
+  top: 16%;
+  left: 10%;
+}
+
+.manual-lesson-network-node.network-node-2 {
+  top: 14%;
+  right: 10%;
+}
+
+.manual-lesson-network-node.network-node-3 {
+  bottom: 16%;
+  left: 12%;
+}
+
+.manual-lesson-network-node.network-node-4 {
+  bottom: 16%;
+  right: 12%;
+}
+
+.manual-lesson-network-connector {
+  position: absolute;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.72), rgba(168, 85, 247, 0.72));
+  transform-origin: left center;
+}
+
+.manual-lesson-network-connector.connector-1 {
+  width: 104px;
+  left: 28%;
+  top: 36%;
+  transform: rotate(22deg);
+}
+
+.manual-lesson-network-connector.connector-2 {
+  width: 104px;
+  right: 28%;
+  top: 36%;
+  transform: rotate(-22deg);
+}
+
+.manual-lesson-network-connector.connector-3 {
+  width: 120px;
+  left: 50%;
+  bottom: 34%;
+  transform: translateX(-50%) rotate(90deg);
+}
+
+.manual-lesson-network-ping {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #22d3ee;
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.8);
+  animation: manualLessonPingTravel 2.8s ease-in-out infinite;
+}
+
+.manual-lesson-network-ping.ping-1 {
+  left: 34%;
+  top: 39%;
+}
+
+.manual-lesson-network-ping.ping-2 {
+  right: 34%;
+  top: 39%;
+  animation-delay: 1s;
+}
+
+.manual-lesson-system-world,
+.manual-lesson-system-cluster,
+.manual-lesson-system-load {
+  position: relative;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.64);
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+}
+
+.manual-lesson-visual-world-map,
+.manual-lesson-visual-replication,
+.manual-lesson-visual-workload,
+.manual-lesson-visual-routing {
+  display: grid;
+  gap: 18px;
+  align-items: center;
+}
+
+.manual-lesson-visual-world-map {
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+}
+
+.manual-lesson-map-board {
+  position: relative;
+  min-height: 252px;
+  border-radius: 28px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at 22% 18%, rgba(34, 211, 238, 0.18), transparent 18%),
+    radial-gradient(circle at 78% 26%, rgba(168, 85, 247, 0.18), transparent 18%),
+    radial-gradient(circle at 46% 78%, rgba(251, 191, 36, 0.14), transparent 16%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(15, 23, 42, 0.66));
+  overflow: hidden;
+}
+
+.manual-lesson-map-board .manual-lesson-world-node.node-1 {
+  left: 12%;
+  top: 18%;
+}
+
+.manual-lesson-map-board .manual-lesson-world-node.node-2 {
+  right: 11%;
+  top: 24%;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.9), rgba(236, 72, 153, 0.86));
+}
+
+.manual-lesson-map-board .manual-lesson-world-node.node-3 {
+  left: 36%;
+  bottom: 15%;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.9), rgba(34, 211, 238, 0.82));
+}
+
+.manual-lesson-map-caption {
+  min-height: 252px;
+  border-radius: 28px;
+  padding: 22px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.16), transparent 22%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.62));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: #e2e8f0;
+}
+
+.manual-lesson-map-caption strong {
+  color: #f8fafc;
+  font-size: 1.1rem;
+}
+
+.manual-lesson-map-caption span {
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.manual-lesson-visual-replication {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.manual-lesson-system-cluster.solo {
+  min-height: 280px;
+}
+
+.manual-lesson-visual-workload {
+  grid-template-columns: 180px 92px minmax(0, 1fr);
+  min-height: 252px;
+}
+
+.manual-lesson-workload-source,
+.manual-lesson-workload-servers {
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.68);
+  backdrop-filter: blur(16px);
+}
+
+.manual-lesson-workload-source {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  text-align: center;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at center, rgba(34, 211, 238, 0.18), transparent 42%),
+    rgba(15, 23, 42, 0.76);
+}
+
+.manual-lesson-workload-source strong {
+  max-width: 120px;
+  line-height: 1.25;
+}
+
+.manual-lesson-workload-split {
+  position: relative;
+  min-height: 220px;
+}
+
+.manual-lesson-workload-split::before,
+.manual-lesson-workload-split::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.82), rgba(168, 85, 247, 0.72));
+  transform: translateX(-50%);
+}
+
+.manual-lesson-workload-split::before {
+  top: 12%;
+  bottom: 12%;
+}
+
+.manual-lesson-workload-split::after {
+  top: 50%;
+  left: 20%;
+  width: 62%;
+  height: 2px;
+  transform: none;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.82), rgba(236, 72, 153, 0.72));
+}
+
+.manual-lesson-workload-servers {
+  min-height: 220px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+  align-content: center;
+}
+
+.manual-lesson-workload-server {
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  display: grid;
+  gap: 10px;
+}
+
+.manual-lesson-workload-server span {
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.manual-lesson-visual-routing {
+  min-height: 252px;
+  padding: 18px;
+  border-radius: 28px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at top left, rgba(34, 211, 238, 0.16), transparent 18%),
+    radial-gradient(circle at bottom right, rgba(168, 85, 247, 0.14), transparent 20%),
+    rgba(15, 23, 42, 0.68);
+}
+
+.manual-lesson-process-track.routing {
+  min-height: 216px;
+  align-items: center;
+}
+
+.manual-lesson-process-track.routing .manual-lesson-process-node {
+  min-height: 132px;
+  display: grid;
+  place-items: center;
+}
+
+.manual-lesson-system-world {
+  min-height: 240px;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(34, 211, 238, 0.16), transparent 20%),
+    radial-gradient(circle at 72% 32%, rgba(59, 130, 246, 0.16), transparent 22%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.62));
+}
+
+.manual-lesson-world-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(circle at center, black 45%, transparent 88%);
+}
+
+.manual-lesson-world-node {
+  position: absolute;
+  width: 72px;
+  height: 72px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.9), rgba(59, 130, 246, 0.88));
+  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.28);
+}
+
+.manual-lesson-world-node.node-west {
+  left: 14%;
+  top: 18%;
+}
+
+.manual-lesson-world-node.node-east {
+  right: 12%;
+  top: 26%;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.9), rgba(236, 72, 153, 0.86));
+}
+
+.manual-lesson-world-node.node-south {
+  left: 34%;
+  bottom: 16%;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.9), rgba(34, 211, 238, 0.82));
+}
+
+.manual-lesson-world-link {
+  position: absolute;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.72), rgba(168, 85, 247, 0.72));
+  transform-origin: left center;
+  animation: manualLessonLineGrow 1s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.manual-lesson-world-link.link-west {
+  left: 34%;
+  top: 36%;
+  width: 92px;
+  transform: rotate(14deg);
+}
+
+.manual-lesson-world-link.link-east {
+  right: 28%;
+  top: 40%;
+  width: 100px;
+  transform: rotate(-14deg);
+}
+
+.manual-lesson-world-link.link-south {
+  left: 42%;
+  bottom: 34%;
+  width: 84px;
+  transform: rotate(74deg);
+}
+
+.manual-lesson-data-packet {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #22d3ee;
+  box-shadow:
+    0 0 18px rgba(34, 211, 238, 0.95),
+    0 0 34px rgba(34, 211, 238, 0.45);
+}
+
+.manual-lesson-data-packet.packet-west {
+  left: 28%;
+  top: 30%;
+}
+
+.manual-lesson-data-packet.packet-east {
+  right: 28%;
+  top: 34%;
+}
+
+.manual-lesson-data-packet.packet-south {
+  left: 38%;
+  bottom: 28%;
+}
+
+.manual-lesson-system-cluster {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.manual-lesson-db-core {
+  position: relative;
+  z-index: 2;
+  width: 134px;
+  height: 134px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.88), rgba(6, 182, 212, 0.84));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  text-align: center;
+  box-shadow: 0 20px 44px rgba(2, 6, 23, 0.32);
+}
+
+.manual-lesson-db-core span {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.82);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.manual-lesson-db-replica {
+  position: absolute;
+  width: 98px;
+  height: 58px;
+  border-radius: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  color: #f8fafc;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.manual-lesson-db-replica.replica-a {
+  top: 18%;
+  left: 10%;
+}
+
+.manual-lesson-db-replica.replica-b {
+  top: 18%;
+  right: 10%;
+}
+
+.manual-lesson-db-replica.replica-c {
+  bottom: 16%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.manual-lesson-db-pulse {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #22d3ee;
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.8);
+  animation: manualLessonPulseTrack 2.4s ease-in-out infinite;
+}
+
+.manual-lesson-db-pulse.pulse-a {
+  top: 36%;
+  left: 28%;
+}
+
+.manual-lesson-db-pulse.pulse-b {
+  top: 36%;
+  right: 28%;
+  animation-delay: 0.8s;
+}
+
+.manual-lesson-db-pulse.pulse-c {
+  bottom: 28%;
+  left: 50%;
+  transform: translateX(-50%);
+  animation-delay: 1.4s;
+}
+
+.manual-lesson-replication-wave {
+  position: absolute;
+  width: 84px;
+  height: 84px;
+  border-radius: 999px;
+  border: 2px solid rgba(34, 211, 238, 0.48);
+  pointer-events: none;
+}
+
+.manual-lesson-replication-wave.wave-a {
+  top: 10%;
+  left: 14%;
+}
+
+.manual-lesson-replication-wave.wave-b {
+  top: 10%;
+  right: 14%;
+}
+
+.manual-lesson-replication-wave.wave-c {
+  bottom: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.manual-lesson-system-load {
+  min-height: 240px;
+  padding: 18px;
+  display: grid;
+  align-content: center;
+  gap: 16px;
+}
+
+.manual-lesson-load-lane {
+  display: grid;
+  gap: 8px;
+}
+
+.manual-lesson-load-lane span {
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.manual-lesson-load-bar {
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.manual-lesson-load-fill {
+  width: 62%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.88), rgba(59, 130, 246, 0.88));
+  animation: manualLessonLoadSweep 2.8s ease-in-out infinite;
+}
+
+.manual-lesson-load-lane.lane-2 .manual-lesson-load-fill {
+  width: 78%;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.86), rgba(236, 72, 153, 0.86));
+  animation-delay: 0.5s;
+}
+
+.manual-lesson-load-lane.lane-3 .manual-lesson-load-fill {
+  width: 56%;
+  background: linear-gradient(90deg, rgba(251, 191, 36, 0.86), rgba(34, 211, 238, 0.82));
+  animation-delay: 1s;
+}
+
+.manual-lesson-concept-card {
+  border-radius: 24px;
+  padding: 22px;
+  display: grid;
+  gap: 10px;
+  animation: manualLessonRise 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.manual-lesson-concept-card p {
+  margin: 0;
+  color: #cbd5e1;
+}
+
+.manual-lesson-concept-label {
+  display: inline-flex;
+  width: fit-content;
+}
+
+.manual-lesson-example-bubble {
+  border-radius: 24px;
+  padding: 20px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  animation: manualLessonFloat 4.2s ease-in-out infinite;
+}
+
+.manual-lesson-shape-board {
+  position: relative;
+  min-height: 230px;
+  border-radius: 26px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    radial-gradient(circle at 18% 16%, rgba(34, 211, 238, 0.12), transparent 26%),
+    radial-gradient(circle at 82% 20%, rgba(168, 85, 247, 0.14), transparent 24%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.56));
+  overflow: hidden;
+}
+
+.manual-lesson-shape {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px 16px;
+  font-weight: 700;
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.26);
+  animation: manualLessonDrift 4.4s ease-in-out infinite;
+}
+
+.manual-lesson-shape span {
+  max-width: 120px;
+  line-height: 1.25;
+}
+
+.manual-lesson-shape.shape-pill {
+  top: 18px;
+  left: 20px;
+  min-width: 110px;
+  min-height: 54px;
+  border-radius: 999px;
+}
+
+.manual-lesson-shape.shape-rect {
+  top: 84px;
+  right: 24px;
+  min-width: 120px;
+  min-height: 70px;
+  border-radius: 22px;
+  animation-delay: 0.8s;
+}
+
+.manual-lesson-shape.shape-primary {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.88), rgba(59, 130, 246, 0.88));
+}
+
+.manual-lesson-shape.shape-secondary {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.84), rgba(236, 72, 153, 0.82));
+}
+
+.manual-lesson-shape-link {
+  position: absolute;
+  left: 120px;
+  right: 112px;
+  top: 88px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.7), rgba(168, 85, 247, 0.7));
+  transform-origin: left center;
+  animation: manualLessonLineGrow 1s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.manual-lesson-shape-link.vertical {
+  left: auto;
+  right: 78px;
+  top: 144px;
+  width: 2px;
+  height: 48px;
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.7), rgba(244, 114, 182, 0.72));
+}
+
+.manual-lesson-example-track {
+  display: grid;
+  gap: 12px;
+}
+
+.manual-lesson-object-row {
+  margin-top: 18px;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.manual-lesson-object {
+  width: 112px;
+  height: 112px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transform: translateY(10px) scale(0.94);
+  animation: manualLessonStepIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--lesson-step-delay, 0ms);
+}
+
+.manual-lesson-object::before,
+.manual-lesson-object::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.manual-lesson-object::before {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.24), rgba(6, 182, 212, 0.2));
+  animation: manualLessonSpinSlow 10s linear infinite;
+}
+
+.manual-lesson-object::after {
+  inset: 12px;
+  border-radius: 24px;
+  background: rgba(15, 23, 42, 0.78);
+}
+
+.manual-lesson-object.object-2::before {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.24), rgba(236, 72, 153, 0.22));
+}
+
+.manual-lesson-object.object-3::before {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(34, 211, 238, 0.2));
+}
+
+.manual-lesson-object-core {
+  position: relative;
+  z-index: 1;
+  width: 76px;
+  min-height: 76px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  border-radius: 22px;
+  color: #f8fafc;
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.manual-lesson-shape-flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.manual-lesson-flow-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.manual-lesson-shape-flow .manual-lesson-shape {
+  position: relative;
+  inset: auto;
+  min-width: 120px;
+  min-height: 58px;
+  border-radius: 20px;
+  animation: manualLessonStepIn 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.manual-lesson-shape.flow-shape-1 {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.84), rgba(59, 130, 246, 0.8));
+}
+
+.manual-lesson-shape.flow-shape-2 {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.84), rgba(99, 102, 241, 0.8));
+}
+
+.manual-lesson-shape.flow-shape-3 {
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.84), rgba(251, 191, 36, 0.76));
+}
+
+.manual-lesson-flow-arrow {
+  width: 34px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.72), rgba(244, 114, 182, 0.72));
+  position: relative;
+  animation: manualLessonLineGrow 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.manual-lesson-flow-arrow::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: -4px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid rgba(244, 114, 182, 0.78);
+}
+
+.manual-lesson-example-step {
+  border-radius: 22px;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  opacity: 0;
+  transform: translateY(14px);
+  animation: manualLessonStepIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--lesson-step-delay, 0ms);
+}
+
+.manual-lesson-example-step span {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.88), rgba(59, 130, 246, 0.9));
+  color: #fff;
+  font-weight: 800;
+}
+
+.manual-lesson-example-step strong {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.manual-lesson-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.manual-lesson-summary-chip {
+  min-height: 76px;
+  border-radius: 20px;
+  padding: 16px;
+  display: flex;
+  align-items: flex-end;
+  color: #f8fafc;
+  font-weight: 700;
+  opacity: 0;
+  transform: scale(0.94) translateY(10px);
+  animation: manualLessonStepIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--lesson-step-delay, 0ms);
+}
+
 .manual-lesson-narration {
   background: #111827;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -1791,6 +2943,147 @@
   white-space: nowrap;
 }
 
+@keyframes manualLessonOrbitSpin {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@keyframes manualLessonOrbitSpinReverse {
+  from {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+}
+
+@keyframes manualLessonPulse {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+@keyframes manualLessonFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes manualLessonRise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes manualLessonStepIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes manualLessonDrift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+@keyframes manualLessonLineGrow {
+  from {
+    opacity: 0;
+    transform: scaleX(0.2);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes manualLessonSpinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes manualLessonPulseTrack {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.72;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 1;
+  }
+}
+
+@keyframes manualLessonLoadSweep {
+  0%,
+  100% {
+    transform: scaleX(0.72);
+    transform-origin: left center;
+  }
+  50% {
+    transform: scaleX(1);
+    transform-origin: left center;
+  }
+}
+
+@keyframes manualLessonTokenTravel {
+  0% {
+    transform: translateX(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateX(52vw);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(72vw);
+    opacity: 0.2;
+  }
+}
+
+@keyframes manualLessonPingTravel {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 1;
+  }
+}
+
 @media (max-width: 980px) {
   .manual-detail-grid {
     grid-template-columns: 1fr;
@@ -1831,6 +3124,50 @@
 
   .manual-lesson-stage {
     padding: 24px 20px;
+  }
+
+  .manual-lesson-visual-title,
+  .manual-lesson-visual-definition,
+  .manual-lesson-visual-system {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-lesson-visual-compare {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-lesson-compare-axis {
+    width: 64px;
+    height: 64px;
+  }
+
+  .manual-lesson-process-track {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-lesson-process-step {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manual-lesson-process-link {
+    width: 2px;
+    height: 24px;
+    margin: 0 auto;
+  }
+
+  .manual-lesson-process-link::after {
+    right: -3px;
+    top: auto;
+    bottom: -8px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 8px solid rgba(168, 85, 247, 0.84);
+    border-bottom: 0;
+  }
+
+  .manual-lesson-shape-flow {
+    justify-content: flex-start;
   }
 }
 
