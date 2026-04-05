@@ -31,7 +31,7 @@ function buildWorkflowGraph() {
           agentId: "agent_8_orchestrator",
           agentName: "Agent 8: Orchestrator",
           status: "running",
-          summary: "Bootstrapped the agentic workflow from the shared LangGraph runtime state.",
+          summary: "Bootstrapped the orchestrated worker flow from the shared LangGraph runtime state.",
           outputs: {
             runtimeSummary: summarizeRuntimeState(state.runtimeState),
             requestedAgents: state.options?.requestedAgents || [
@@ -39,10 +39,10 @@ function buildWorkflowGraph() {
               "agent_8_grade_intervention",
               "agent_1_parse_and_research",
               "agent_2_summarize_by_preference",
-              "agent_6_create_study_plan",
               "agent_3_create_flashcards",
-              "agent_4_create_quizzes",
               "agent_5_create_video_plan",
+              "agent_6_create_study_plan",
+              "agent_4_create_quizzes",
             ],
           },
         }),
@@ -124,9 +124,13 @@ function buildWorkflowGraph() {
         agentId: "agent_8_orchestrator",
         agentName: "Agent 8: Orchestrator",
         status: "ready_for_team_implementation",
-        summary: "Completed the orchestrated workflow skeleton for state-aware decisions, grade interventions, parse, summarize, study plans, flashcards, quizzes, and video generation.",
+        summary: "Completed the orchestrated workflow skeleton for state-aware decisions, score interventions, material parsing, summaries, quizzes, study plans, and video generation.",
         outputs: {
           completedAgents: Object.keys(state.results || {}),
+          orchestrationPatterns: [
+            "When grades are released, the decider and grade-intervention agents prepare recovery or reinforcement suggestions.",
+            "When new material is posted, the orchestrator routes into parse/research, then summary, then fans out to flashcards, study plan, and video generation in parallel.",
+          ],
           nextStep:
             "Each teammate can now implement their assigned agent file without changing the runtime contract or orchestration graph.",
         },
@@ -137,11 +141,13 @@ function buildWorkflowGraph() {
     .addEdge("agent_7_state_change_decider", "agent_8_grade_intervention")
     .addEdge("agent_8_grade_intervention", "agent_1_parse_and_research")
     .addEdge("agent_1_parse_and_research", "agent_2_summarize_by_preference")
+    .addEdge("agent_2_summarize_by_preference", "agent_3_create_flashcards")
+    .addEdge("agent_2_summarize_by_preference", "agent_5_create_video_plan")
     .addEdge("agent_2_summarize_by_preference", "agent_6_create_study_plan")
-    .addEdge("agent_6_create_study_plan", "agent_3_create_flashcards")
     .addEdge("agent_3_create_flashcards", "agent_4_create_quizzes")
-    .addEdge("agent_4_create_quizzes", "agent_5_create_video_plan")
+    .addEdge("agent_4_create_quizzes", "orchestrator_finalize")
     .addEdge("agent_5_create_video_plan", "orchestrator_finalize")
+    .addEdge("agent_6_create_study_plan", "orchestrator_finalize")
     .addEdge("orchestrator_finalize", END)
     .compile();
 }

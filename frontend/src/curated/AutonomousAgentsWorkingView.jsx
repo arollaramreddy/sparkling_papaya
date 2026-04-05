@@ -1,3 +1,4 @@
+import { useState } from "react";
 import "./autonomous-agents-working.css";
 
 const DEFAULT_PREFERENCES = {
@@ -24,9 +25,15 @@ function formatTime(value) {
   });
 }
 
-function ChangeCard({ item, onDraft, onSend }) {
+function ChangeCard({ item, onClarificationChange, onDraft, onSend }) {
   const draftLabel = item.isDrafting ? "Drafting..." : "Draft";
   const sendLabel = item.isSending ? "Sending..." : "Send";
+  const [localClarification, setLocalClarification] = useState(item.clarificationInput || "");
+
+  function handleClarificationChange(value) {
+    setLocalClarification(value);
+    onClarificationChange?.(item.id, value);
+  }
 
   return (
     <article className="agent-card">
@@ -55,6 +62,26 @@ function ChangeCard({ item, onDraft, onSend }) {
           </div>
         ) : null}
 
+        {item.draftState?.requiresClarification ? (
+          <div className="agent-clarification-box">
+            <strong>{item.draftState.clarificationQuestion || "The agent needs more context."}</strong>
+            <textarea
+              className="agent-clarification-input"
+              value={localClarification}
+              onChange={(event) => handleClarificationChange(event.target.value)}
+              placeholder="Add the missing context here..."
+            />
+            <button
+              type="button"
+              className="agent-secondary"
+              onClick={() => onDraft?.(item)}
+              disabled={item.isDrafting || !localClarification.trim()}
+            >
+              Redraft with my answer
+            </button>
+          </div>
+        ) : null}
+
         <div className="agent-actions">
           <button
             type="button"
@@ -68,7 +95,7 @@ function ChangeCard({ item, onDraft, onSend }) {
             type="button"
             className="agent-primary"
             onClick={() => onSend?.(item)}
-            disabled={item.isDrafting || item.isSending}
+            disabled={item.isDrafting || item.isSending || item.draftState?.requiresClarification}
           >
             {sendLabel}
           </button>
@@ -122,7 +149,7 @@ function MaterialWorkflowPanel({ selectedMaterial, materialWorkflow, materialLoa
       ) : materialLoading ? (
         <div className="empty-card">
           <h3>Agents are working</h3>
-          <p>Agent 1 is grounding the material, Agent 2 is tailoring the summary, and Agent 3 is preparing the interactive video handoff.</p>
+          <p>Agent 1 is grounding the material, Agent 2 is tailoring the summary, and Agent 5 is preparing the interactive video handoff.</p>
         </div>
       ) : materialWorkflow ? (
         <div className="material-workflow-stack">
@@ -152,7 +179,19 @@ function MaterialWorkflowPanel({ selectedMaterial, materialWorkflow, materialLoa
               </div>
               <div className="workflow-line">
                 <strong>Agent 3</strong>
-                <span>Prepare the interactive real-world video handoff for your teammate’s video agent.</span>
+                <span>Turn the summary into quick recall flashcards.</span>
+              </div>
+              <div className="workflow-line">
+                <strong>Agent 4</strong>
+                <span>Generate quiz checks for understanding from the learning package.</span>
+              </div>
+              <div className="workflow-line">
+                <strong>Agent 5</strong>
+                <span>Prepare the interactive real-world video handoff for the video lesson workflow.</span>
+              </div>
+              <div className="workflow-line">
+                <strong>Agent 6</strong>
+                <span>Refresh the study plan around deadlines and weak topics.</span>
               </div>
             </div>
           </div>
@@ -366,4 +405,10 @@ export default function AutonomousAgentsWorkingView({
   );
 }
 
-export { DEFAULT_PREFERENCES };
+export {
+  ChangeCard,
+  DEFAULT_PREFERENCES,
+  MaterialCard,
+  MaterialWorkflowPanel,
+  SettingsPanel,
+};

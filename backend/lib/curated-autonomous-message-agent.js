@@ -2,6 +2,13 @@ function normalizeText(value) {
   return String(value || "").trim();
 }
 
+function normalizeName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .trim();
+}
+
 function getReplyPreferences(preferences = {}) {
   const reply = preferences.reply || {};
   return {
@@ -13,6 +20,63 @@ function getReplyPreferences(preferences = {}) {
     includeCourseContext: reply.includeCourseContext !== false,
     signoffStyle: reply.signoffStyle || "simple",
   };
+}
+
+function deriveMessageCourseContext(message, runtimeState) {
+  const courses = runtimeState?.canvas?.normalizedWorkspace?.courses || [];
+  const assignments = runtimeState?.canvas?.normalizedWorkspace?.assignments || [];
+  const normalizedMessage = normalizeName(
+    `${message?.subject || ""}\n${message?.last_message || ""}`
+  );
+  const directCourseId = message?.course_id ? String(message.course_id) : "";
+  if (directCourseId) {
+    const directCourse = courses.find((course) => String(course.id) === directCourseId);
+    if (directCourse) {
+      return directCourse;
+    }
+  }
+
+  const contextHints = [
+    normalizeName(message?.context_name || ""),
+    normalizeName(message?.context_code || ""),
+  ].filter(Boolean);
+
+  if (contextHints.length) {
+    const contextMatches = courses.filter((course) => {
+      const name = normalizeName(course.name || "");
+      const code = normalizeName(course.code || "");
+      return contextHints.some((hint) => hint === name || hint === code || (name && hint.includes(name)) || (code && hint.includes(code)));
+    });
+
+    if (contextMatches.length === 1) {
+      return contextMatches[0];
+    }
+  }
+
+  const explicitCourseMatches = courses.filter((course) => {
+    const name = normalizeName(course.name || "");
+    const code = normalizeName(course.code || "");
+    return (name && normalizedMessage.includes(name)) || (code && normalizedMessage.includes(code));
+  });
+
+  if (explicitCourseMatches.length === 1) {
+    return explicitCourseMatches[0];
+  }
+
+  const assignmentMatches = assignments.filter((assignment) => {
+    const assignmentName = normalizeName(assignment.name || "");
+    return assignmentName && normalizedMessage.includes(assignmentName);
+  });
+
+  const assignmentCourseIds = Array.from(
+    new Set(assignmentMatches.map((assignment) => String(assignment.course_id || "")))
+  ).filter(Boolean);
+
+  if (assignmentCourseIds.length === 1) {
+    return courses.find((course) => String(course.id) === assignmentCourseIds[0]) || null;
+  }
+
+  return null;
 }
 
 function getCourseFacts(runtimeState, courseId = null) {
@@ -77,10 +141,64 @@ function classifyMessageIntent(message, runtimeState) {
   };
 }
 
-function buildReplyDraftPrompt({ message, runtimeState, preferences = {} }) {
+function assessReplyContext(message, runtimeState, extraContext = "") {
+  const intent = classifyMessageIntent(message, runtimeState);
+  if (!intent.needsReply) {
+    return {
+      requiresClarification: false,
+      clarificationQuestion: "",
+      missingContext: [],
+    };
+  }
+
+  if (normalizeText(extraContext)) {
+    return {
+      requiresClarification: false,
+      clarificationQuestion: "",
+      missingContext: [],
+    };
+  }
+
+  const courses = runtimeState?.canvas?.normalizedWorkspace?.courses || [];
+  const matchedCourse = deriveMessageCourseContext(message, runtimeState);
+  const courseFacts = getCourseFacts(runtimeState, matchedCourse?.id || null);
+  const missingContext = [];
+  let clarificationQuestion = "";
+
+  if (intent.isCourseRelated && !matchedCourse && courses.length > 1) {
+    missingContext.push("course");
+    clarificationQuestion = "Which course is this message about?";
+  }
+
+  if (intent.asksForGrade && !courseFacts.gradedAssignments.length) {
+    missingContext.push("grade_detail");
+    clarificationQuestion = clarificationQuestion || "What graded item or score are you asking about?";
+  }
+
+  if (intent.asksForAssignment && !courseFacts.upcomingAssignments.length) {
+    missingContext.push("assignment_detail");
+    clarificationQuestion = clarificationQuestion || "Which assignment, quiz, or due date should I mention?";
+  }
+
+  const messageBody = normalizeText(message?.last_message || "");
+  if (!clarificationQuestion && messageBody.split(/\s+/).filter(Boolean).length < 4) {
+    missingContext.push("message_detail");
+    clarificationQuestion = "What should I mention in the reply?";
+  }
+
+  return {
+    requiresClarification: Boolean(clarificationQuestion),
+    clarificationQuestion,
+    missingContext,
+  };
+}
+
+function buildReplyDraftPrompt({ message, runtimeState, preferences = {}, extraContext = "" }) {
   const replyPreferences = getReplyPreferences(preferences);
   const intent = classifyMessageIntent(message, runtimeState);
-  const courseFacts = getCourseFacts(runtimeState);
+  const matchedCourse = deriveMessageCourseContext(message, runtimeState);
+  const courseFacts = getCourseFacts(runtimeState, matchedCourse?.id || null);
+  const contextAssessment = assessReplyContext(message, runtimeState, extraContext);
 
   return `You are an autonomous Canvas copilot drafting a reply for a student inbox message.
 
@@ -93,6 +211,9 @@ Return ONLY valid JSON:
     "asksForGrade": false,
     "asksForAssignment": false
   },
+  "requiresClarification": false,
+  "clarificationQuestion": "",
+  "missingContext": ["course | grade_detail | assignment_detail | message_detail"],
   "draft": "ready-to-send reply text",
   "whyThisReply": ["short reason", "short reason"],
   "usedState": ["what state was used", "what state was used"]
@@ -107,6 +228,10 @@ ${JSON.stringify(
       id: message?.id || null,
       subject: message?.subject || "",
       last_author_name: message?.last_author_name || "",
+      counterpart_name: message?.counterpart_name || "",
+      context_code: message?.context_code || "",
+      context_name: message?.context_name || "",
+      course_id: message?.course_id || null,
       last_message: message?.last_message || "",
       last_message_at: message?.last_message_at || null,
     },
@@ -120,10 +245,33 @@ ${JSON.stringify(intent, null, 2)}
 Relevant Canvas state:
 ${JSON.stringify(courseFacts, null, 2)}
 
+Matched course context:
+${JSON.stringify(
+    matchedCourse
+      ? {
+          id: matchedCourse.id,
+          name: matchedCourse.name,
+          code: matchedCourse.code || "",
+        }
+      : null,
+    null,
+    2
+  )}
+
+Student-provided extra context:
+${normalizeText(extraContext) || "none"}
+
+Context assessment:
+${JSON.stringify(contextAssessment, null, 2)}
+
 Rules:
 - Draft in first person as the student.
+- If you use a greeting, address the other participant, not the student account holder.
+- Never greet the student using their own name.
 - If the message is course-related, use the Canvas state when helpful.
+- If a course can be inferred from the message, use only that course context.
 - If no exact fact is available, avoid inventing details.
+- If the context assessment says clarification is needed, return requiresClarification: true, ask one short question, leave the draft empty, and list the missing context.
 - Match the reply preferences closely.
 - Keep the message natural, human, and ready to send.`;
 }
@@ -134,11 +282,12 @@ function buildAutonomousInboxFeed(runtimeState, preferences = {}) {
 
   return messages.slice(0, 8).map((message) => {
     const intent = classifyMessageIntent(message, runtimeState);
+    const matchedCourse = deriveMessageCourseContext(message, runtimeState);
     return {
       id: message.id,
       type: "message",
       title: message.subject || "Message",
-      subtitle: message.last_author_name || "Inbox",
+      subtitle: matchedCourse?.name || message.last_author_name || "Inbox",
       createdAt: message.last_message_at || runtimeState?.meta?.generatedAt || null,
       priority:
         intent.asksForGrade || intent.asksForAssignment
@@ -153,6 +302,7 @@ function buildAutonomousInboxFeed(runtimeState, preferences = {}) {
         "Send",
       ],
       intent,
+      matchedCourse,
       replyPreferences,
     };
   });
@@ -160,8 +310,10 @@ function buildAutonomousInboxFeed(runtimeState, preferences = {}) {
 
 module.exports = {
   buildAutonomousInboxFeed,
+  assessReplyContext,
   buildReplyDraftPrompt,
   classifyMessageIntent,
+  deriveMessageCourseContext,
   getCourseFacts,
   getReplyPreferences,
 };

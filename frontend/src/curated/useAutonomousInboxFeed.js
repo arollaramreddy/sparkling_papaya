@@ -6,6 +6,7 @@ import {
   loadRuntimeState,
   loadStateEvents,
   runAgenticWorkflow,
+  runLocalPdfWorkflow,
   runAutonomousMonitor,
   savePreferences,
   sendReply,
@@ -65,6 +66,19 @@ function resolveMaterialContext(runtimeState, event) {
   };
 }
 
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Failed to read local PDF"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function useAutonomousInboxFeed(initialParams, currentUserName = "") {
   const stableParams = initialParams || EMPTY_PARAMS;
   const [runtimeState, setRuntimeState] = useState(null);
@@ -73,12 +87,14 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
   const [stateEvents, setStateEvents] = useState([]);
   const [selectedMaterial, setSelectedMaterial] = useState(null);
   const [materialWorkflow, setMaterialWorkflow] = useState(null);
+  const [localMaterialCards, setLocalMaterialCards] = useState([]);
   const [materialLoading, setMaterialLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [draftingMessageId, setDraftingMessageId] = useState(null);
   const [sendingMessageId, setSendingMessageId] = useState(null);
   const [drafts, setDrafts] = useState({});
+  const [clarificationInputs, setClarificationInputs] = useState({});
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
@@ -163,31 +179,56 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
     setDraftingMessageId(item.id);
     setError("");
     try {
-      const result = await draftReply(item.id);
+      const result = await draftReply(item.id, clarificationInputs[item.id] || "");
       setDrafts((current) => ({
         ...current,
-        [item.id]: result.draft || "",
+        [item.id]: {
+          draft: result.draft || "",
+          requiresClarification: Boolean(result.requiresClarification),
+          clarificationQuestion: result.clarificationQuestion || "",
+          missingContext: result.missingContext || [],
+          summary: result.summary || "",
+        },
       }));
     } catch (err) {
       setError(err.message || "Failed to draft reply");
     } finally {
       setDraftingMessageId(null);
     }
+  }, [clarificationInputs]);
+
+  const onClarificationChange = useCallback((messageId, value) => {
+    setClarificationInputs((current) => ({
+      ...current,
+      [messageId]: value,
+    }));
   }, []);
 
   const onSendReply = useCallback(async (item) => {
     if (!item?.id) return;
     setSendingMessageId(item.id);
     setError("");
-    let draft = drafts[item.id];
+    let draftState = drafts[item.id];
+    let draft = draftState?.draft || "";
     if (!draft) {
       try {
-        const result = await draftReply(item.id);
+        const result = await draftReply(item.id, clarificationInputs[item.id] || "");
         draft = result.draft || "";
         setDrafts((current) => ({
           ...current,
-          [item.id]: draft,
+          [item.id]: {
+            draft,
+            requiresClarification: Boolean(result.requiresClarification),
+            clarificationQuestion: result.clarificationQuestion || "",
+            missingContext: result.missingContext || [],
+            summary: result.summary || "",
+          },
         }));
+        if (result.requiresClarification || !draft) {
+          setError(result.clarificationQuestion || "The agent needs more context before sending.");
+          setSendingMessageId(null);
+          return;
+        }
       } catch (err) {
         setError(err.message || "Failed to draft reply before sending");
         setSendingMessageId(null);
@@ -203,7 +244,7 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
     } finally {
       setSendingMessageId(null);
     }
-  }, [drafts, syncNow]);
+  }, [clarificationInputs, drafts, syncNow]);
 
   useEffect(() => {
     refresh();
@@ -216,14 +257,17 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
 
   const materialCards = useMemo(
     () =>
-      (stateEvents || [])
-        .filter(
-          (event) =>
-            event?.event_type === "new_material_posted" || event?.event_type === "new_module_posted"
-        )
-        .map((event) => resolveMaterialContext(runtimeState, event))
-        .filter((item) => item.courseId),
-    [runtimeState, stateEvents]
+      [
+        ...localMaterialCards,
+        ...(stateEvents || [])
+          .filter(
+            (event) =>
+              event?.event_type === "new_material_posted" || event?.event_type === "new_module_posted"
+          )
+          .map((event) => resolveMaterialContext(runtimeState, event))
+          .filter((item) => item.courseId),
+      ],
+    [localMaterialCards, runtimeState, stateEvents]
   );
 
   const onOpenMaterial = useCallback(
@@ -251,6 +295,54 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
     [preferences]
   );
 
+  const onTestLocalPdf = useCallback(
+    async ({ file, courseId }) => {
+      if (!file || !courseId) return;
+      setSelectedMaterial(null);
+      setMaterialWorkflow(null);
+      setMaterialLoading(true);
+      setError("");
+
+      try {
+        const fileData = await fileToBase64(file);
+        const workflow = await runLocalPdfWorkflow({
+          courseId,
+          fileName: file.name,
+          fileData,
+          workflowType: "topic_deep_dive",
+          preferences,
+        });
+
+        const testMaterial = {
+          eventId: workflow.runId,
+          eventType: "local_pdf_uploaded",
+          courseId: workflow.testMaterial?.courseId || String(courseId),
+          courseName: workflow.testMaterial?.courseName || `Course ${courseId}`,
+          moduleId: workflow.testMaterial?.moduleId || "local-upload-tests",
+          moduleName: workflow.testMaterial?.moduleName || "Local PDF Test Uploads",
+          topicId: workflow.topicId || workflow.testMaterial?.id || null,
+          fileName: workflow.testMaterial?.fileName || file.name,
+          entityId: workflow.testMaterial?.id || workflow.topicId || null,
+          createdAt: workflow.testMaterial?.createdAt || new Date().toISOString(),
+          subtitle: workflow.testMaterial?.subtitle || "Local PDF uploaded for autonomous testing",
+          source: "local_upload_test",
+        };
+
+        setLocalMaterialCards((current) => [
+          testMaterial,
+          ...current.filter((item) => String(item.entityId) !== String(testMaterial.entityId)),
+        ]);
+        setSelectedMaterial(testMaterial);
+        setMaterialWorkflow(workflow);
+      } catch (err) {
+        setError(err.message || "Failed to run local PDF test");
+      } finally {
+        setMaterialLoading(false);
+      }
+    },
+    [preferences]
+  );
+
   return {
     drafts,
     error,
@@ -260,10 +352,13 @@ export default function useAutonomousInboxFeed(initialParams, currentUserName = 
     materialLoading,
     materialWorkflow,
     draftingMessageId,
+    clarificationInputs,
     onOpenMaterial,
+    onClarificationChange,
     onDraftReply,
     onPreferenceChange,
     onSendReply,
+    onTestLocalPdf,
     preferences,
     rawMessages,
     refresh,

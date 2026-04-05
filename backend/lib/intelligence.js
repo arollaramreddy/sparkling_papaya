@@ -112,6 +112,7 @@ function getAssignmentsFromCanvasState(canvasState) {
       submitted_at: assignment.submitted_at || null,
       missing: Boolean(assignment.missing),
       submission_status: assignment.submission_status || null,
+      is_completed: Boolean(assignment.is_completed),
     }))
     .sort((a, b) => new Date(a.due_at || 0) - new Date(b.due_at || 0));
 }
@@ -133,7 +134,9 @@ function getPerformanceSignals(assignments) {
 
   const lowScores = normalized.filter((assignment) => assignment.percent < 70);
   const moderateScores = normalized.filter((assignment) => assignment.percent >= 70 && assignment.percent < 80);
-  const missingAssignments = assignments.filter((assignment) => assignment.missing);
+  const missingAssignments = assignments.filter(
+    (assignment) => assignment.missing && !assignment.is_completed
+  );
   const latestThree = normalized.slice(-3);
   const earliestThree = normalized.slice(0, 3);
   const recentAverage = latestThree.length
@@ -170,9 +173,10 @@ function buildRiskDrivers({
   performance,
 }) {
   const drivers = [];
-  const upcoming24h = assignments.filter((item) => new Date(item.due_at) - now <= 24 * 60 * 60 * 1000 && new Date(item.due_at) > now);
-  const upcoming72h = assignments.filter((item) => new Date(item.due_at) - now <= 72 * 60 * 60 * 1000 && new Date(item.due_at) > now);
-  const overdue = assignments.filter((item) => new Date(item.due_at) <= now);
+  const activeAssignments = assignments.filter((item) => !item.is_completed);
+  const upcoming24h = activeAssignments.filter((item) => item.due_at && new Date(item.due_at) - now <= 24 * 60 * 60 * 1000 && new Date(item.due_at) > now);
+  const upcoming72h = activeAssignments.filter((item) => item.due_at && new Date(item.due_at) - now <= 72 * 60 * 60 * 1000 && new Date(item.due_at) > now);
+  const overdue = activeAssignments.filter((item) => item.due_at && new Date(item.due_at) <= now);
   const highGapCount = learningGaps.filter((gap) => String(gap.severity).toLowerCase() === "high").length;
   const mediumGapCount = learningGaps.filter((gap) => String(gap.severity).toLowerCase() === "medium").length;
   const lastEventAt = events[0]?.created_at ? new Date(events[0].created_at) : null;
@@ -309,7 +313,7 @@ function deriveRiskLevel(score) {
 function buildAutonomousSupportNetwork({ level, performance, learningGaps, assignments }) {
   const primaryLowScore = performance.lowScores[0];
   const primaryGap = learningGaps[0];
-  const upcoming = assignments.filter((assignment) => assignment.due_at).slice(0, 3);
+  const upcoming = assignments.filter((assignment) => assignment.due_at && !assignment.is_completed).slice(0, 3);
   const team = [
     {
       agent: "Performance Watcher",
@@ -379,7 +383,7 @@ function buildAutonomousSupportNetwork({ level, performance, learningGaps, assig
 function buildRecommendations({ level, assignments, learningGaps, preferences, performance }) {
   const recommendations = [];
   const primaryGap = learningGaps[0];
-  const dueSoon = assignments.slice(0, 3);
+  const dueSoon = assignments.filter((assignment) => assignment.due_at && !assignment.is_completed).slice(0, 3);
 
   if (level === "critical" || level === "high") {
     recommendations.push("Start a structured recovery block today with one urgent deliverable and one weak concept.");
@@ -499,7 +503,7 @@ function generateAutonomousReviewPlan({
   const assignments = getAssignmentsFromCanvasState(canvasState);
   const performance = getPerformanceSignals(assignments);
   const learningGaps = getLearningGaps(db, userId, courseId, 6);
-  const focusAssignments = assignments.filter((item) => new Date(item.due_at) > now).slice(0, 3);
+  const focusAssignments = assignments.filter((item) => item.due_at && !item.is_completed && new Date(item.due_at) > now).slice(0, 3);
   const reviewSessions = [];
   const autonomousActions = [];
 

@@ -5,7 +5,9 @@ import useAutonomousInboxFeed from "./useAutonomousInboxFeed";
 import { loadMessages, messageMatchesUser } from "./autonomousInboxApi";
 import "../autonomous-page.css";
 
-const API = "http://localhost:3001/api";
+import { getApiBase } from "../apiBase";
+
+const API = getApiBase();
 
 function RawInboxCards({ snapshot, onDraftReply, onSendReply, currentUserName }) {
   const messages = (snapshot?.messages || []).filter((message) =>

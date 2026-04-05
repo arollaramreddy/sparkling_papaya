@@ -21,6 +21,28 @@ const LESSON_MODE_OPTIONS = [
   { id: "detailed", label: "Detailed" },
 ];
 
+const AGENT_PACK_OPTIONS = [
+  { id: "quizzes", label: "Quizzes" },
+  { id: "flashcards", label: "Flashcards" },
+  { id: "video_plan", label: "Video plan" },
+  { id: "study_plan", label: "Study planner" },
+];
+
+const DEFAULT_STUDY_PLAN_PREFERENCES = {
+  availableDailyMinutes: 60,
+  sessionLength: 30,
+  horizonDays: 7,
+  pace: "balanced",
+  preferredTimeOfDay: "evening",
+  includeBreaks: true,
+  weekendStudy: true,
+};
+
+function formatMinutes(minutes) {
+  if (!minutes) return "0 min";
+  return `${minutes} min`;
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return "No due date";
   return new Date(dateStr).toLocaleDateString("en-US", {
@@ -36,6 +58,12 @@ function formatSize(bytes) {
   if (!bytes) return "";
   const kb = bytes / 1024;
   return kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`;
+}
+
+function formatScore(score, pointsPossible) {
+  if (score === null || score === undefined) return "-";
+  if (pointsPossible === null || pointsPossible === undefined) return `${score}`;
+  return `${score} / ${pointsPossible}`;
 }
 
 function renderInline(text) {
@@ -82,6 +110,49 @@ function renderMarkdown(text) {
       </p>
     );
   });
+}
+
+function optionLetter(index) {
+  return ["A", "B", "C", "D"][index] || String.fromCharCode(65 + index);
+}
+
+function normalizeQuizQuestion(question = {}) {
+  const rawOptions = Array.isArray(question.options)
+    ? question.options
+    : Array.isArray(question.choices)
+      ? question.choices
+      : [];
+  const options = rawOptions
+    .map((option) => (typeof option === "string" ? option : option?.text || option?.label || ""))
+    .map((option) => String(option || "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  let correctOption = String(
+    question.correct_answer ||
+      question.correct_option ||
+      question.correctAnswer ||
+      ""
+  )
+    .trim()
+    .toUpperCase();
+
+  if (!["A", "B", "C", "D"].includes(correctOption) && options.length) {
+    const answerText = String(question.answer || "").trim().toLowerCase();
+    const matchedIndex = options.findIndex((option) => option.toLowerCase() === answerText);
+    if (matchedIndex >= 0) {
+      correctOption = optionLetter(matchedIndex);
+    }
+  }
+
+  return {
+    question: question.question || "Quiz question",
+    explanation: question.explanation || "",
+    options,
+    correctOption,
+    answer: question.answer || "",
+    difficulty: question.difficulty || "",
+  };
 }
 
 function inferSemesterLabel(course) {
@@ -375,6 +446,12 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
   const [moduleSummary, setModuleSummary] = useState("");
   const [summarizing, setSummarizing] = useState({});
   const [summarizingModule, setSummarizingModule] = useState(false);
+  const [moduleWorkflowResults, setModuleWorkflowResults] = useState({});
+  const [moduleWorkflowTarget, setModuleWorkflowTarget] = useState("quizzes");
+  const [moduleWorkflowLoading, setModuleWorkflowLoading] = useState(false);
+  const [moduleWorkflowError, setModuleWorkflowError] = useState("");
+  const [quizSelections, setQuizSelections] = useState({});
+  const [studyPlanPreferences, setStudyPlanPreferences] = useState(DEFAULT_STUDY_PLAN_PREFERENCES);
   const [extractedTexts, setExtractedTexts] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
   const [lessonJobs, setLessonJobs] = useState({});
@@ -416,6 +493,12 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     setModuleSummary("");
     setSummarizing({});
     setSummarizingModule(false);
+    setModuleWorkflowResults({});
+    setModuleWorkflowTarget("quizzes");
+    setModuleWorkflowLoading(false);
+    setModuleWorkflowError("");
+    setQuizSelections({});
+    setStudyPlanPreferences(DEFAULT_STUDY_PLAN_PREFERENCES);
     setExtractedTexts({});
     setSearchQuery("");
     setLessonJobs({});
@@ -481,7 +564,24 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     });
   }, [extractedTexts, moduleFiles, searchQuery]);
 
+  const upcomingAssignments = useMemo(
+    () =>
+      assignments
+        .filter((assignment) => assignment.due_at && !assignment.is_completed)
+        .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)),
+    [assignments]
+  );
+
+  const gradedAssignments = useMemo(
+    () =>
+      assignments
+        .filter((assignment) => assignment.score !== null && assignment.score !== undefined)
+        .sort((a, b) => new Date(b.submitted_at || b.due_at || 0) - new Date(a.submitted_at || a.due_at || 0)),
+    [assignments]
+  );
+
   const pdfCount = moduleFiles.filter((file) => file.is_pdf && file.type === "File").length;
+  const selectedWorkflow = moduleWorkflowResults[moduleWorkflowTarget] || null;
 
   async function handleCourseSelect(course) {
     resetCourseState();
@@ -509,6 +609,11 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     setModuleFiles([]);
     setSummaries({});
     setModuleSummary("");
+    setModuleWorkflowResults({});
+    setModuleWorkflowTarget("quizzes");
+    setModuleWorkflowError("");
+    setQuizSelections({});
+    setStudyPlanPreferences(DEFAULT_STUDY_PLAN_PREFERENCES);
     setLoadingFiles(true);
 
     try {
@@ -613,10 +718,64 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
   async function handleSummarizeAllPDFs() {
     for (const file of moduleFiles.filter((item) => item.is_pdf && item.type === "File")) {
       if (!summaries[file.id]) {
-        // eslint-disable-next-line no-await-in-loop
         await handleSummarizeFile(file);
       }
     }
+  }
+
+  async function handleGenerateModuleWorkflow(target = moduleWorkflowTarget) {
+    if (!selectedCourse || !selectedModule) return;
+
+    setModuleWorkflowTarget(target);
+    setModuleWorkflowError("");
+    setModuleWorkflowLoading(true);
+
+    try {
+      const workflow = await apiFetchJson("/agentic-workflow", {
+        method: "POST",
+        body: JSON.stringify({
+          courseId: selectedCourse.id,
+          moduleId: selectedModule.id,
+          workflowType: "module_mastery",
+          generationTargets: [target],
+          preferences: {
+            studyPlan: studyPlanPreferences,
+            reply: {
+              length: "medium",
+              tone: "supportive",
+              interactivity: "balanced",
+              emoji: false,
+              includeNextSteps: true,
+              includeCourseContext: true,
+              signoffStyle: "simple",
+            },
+          },
+        }),
+      });
+
+      setModuleWorkflowResults((current) => ({
+        ...current,
+        [target]: workflow,
+      }));
+    } catch (error) {
+      setModuleWorkflowError(error.message || "Failed to generate agent workflow.");
+    } finally {
+      setModuleWorkflowLoading(false);
+    }
+  }
+
+  function handleQuizSelection(target, questionIndex, optionKey) {
+    setQuizSelections((current) => ({
+      ...current,
+      [`${target}-${questionIndex}`]: optionKey,
+    }));
+  }
+
+  function updateStudyPlanPreference(key, value) {
+    setStudyPlanPreferences((current) => ({
+      ...current,
+      [key]: value,
+    }));
   }
 
   function updateLessonJob(fileId, updater) {
@@ -988,6 +1147,15 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
                           <button className="manual-btn" onClick={handleSummarizeAllPDFs}>
                             Summarize all PDFs
                           </button>
+                          <button
+                            className="manual-btn"
+                            onClick={() => handleGenerateModuleWorkflow(moduleWorkflowTarget)}
+                            disabled={moduleWorkflowLoading}
+                          >
+                            {moduleWorkflowLoading
+                              ? "Running agents..."
+                              : "Generate selected output"}
+                          </button>
                         </>
                       ) : null}
                     </div>
@@ -1162,14 +1330,296 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
             </div>
           ) : null}
 
-          {assignments.length ? (
+          {selectedModule ? (
+            <div className="manual-card">
+              <div className="manual-toolbar">
+                <div>
+                  <p className="manual-section-kicker">Agent workflow</p>
+                  <h3 className="manual-card-title">Choose what to generate</h3>
+                </div>
+              </div>
+
+              <div className="manual-agent-targets">
+                {AGENT_PACK_OPTIONS.map((option) => {
+                  const hasResult = Boolean(moduleWorkflowResults[option.id]);
+                  const isActive = moduleWorkflowTarget === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`manual-agent-target ${isActive ? "active" : ""}`}
+                      onClick={() => setModuleWorkflowTarget(option.id)}
+                    >
+                      <strong>{option.label}</strong>
+                      <span>{hasResult ? "Generated" : "Not generated yet"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="manual-card-actions" style={{ marginTop: 18 }}>
+                <button
+                  className="manual-btn primary"
+                  onClick={() => handleGenerateModuleWorkflow(moduleWorkflowTarget)}
+                  disabled={moduleWorkflowLoading}
+                >
+                  {moduleWorkflowLoading
+                    ? "Generating..."
+                    : moduleWorkflowResults[moduleWorkflowTarget]
+                      ? `Regenerate ${AGENT_PACK_OPTIONS.find((option) => option.id === moduleWorkflowTarget)?.label || "output"}`
+                      : `Generate ${AGENT_PACK_OPTIONS.find((option) => option.id === moduleWorkflowTarget)?.label || "output"}`}
+                </button>
+              </div>
+
+              {moduleWorkflowTarget === "study_plan" ? (
+                <div className="manual-study-preferences">
+                  <div className="manual-study-preferences-header">
+                    <h4>Study plan preferences</h4>
+                    <p className="manual-muted">
+                      Set your time and planning preferences before generating the plan.
+                    </p>
+                  </div>
+
+                  <div className="manual-study-preferences-grid">
+                    <label className="manual-study-field">
+                      <span>Time per day</span>
+                      <select
+                        value={String(studyPlanPreferences.availableDailyMinutes)}
+                        onChange={(event) =>
+                          updateStudyPlanPreference("availableDailyMinutes", Number(event.target.value))
+                        }
+                      >
+                        <option value="30">30 min</option>
+                        <option value="45">45 min</option>
+                        <option value="60">60 min</option>
+                        <option value="90">90 min</option>
+                        <option value="120">120 min</option>
+                      </select>
+                    </label>
+
+                    <label className="manual-study-field">
+                      <span>Session length</span>
+                      <select
+                        value={String(studyPlanPreferences.sessionLength)}
+                        onChange={(event) =>
+                          updateStudyPlanPreference("sessionLength", Number(event.target.value))
+                        }
+                      >
+                        <option value="20">20 min</option>
+                        <option value="30">30 min</option>
+                        <option value="45">45 min</option>
+                        <option value="60">60 min</option>
+                      </select>
+                    </label>
+
+                    <label className="manual-study-field">
+                      <span>Plan horizon</span>
+                      <select
+                        value={String(studyPlanPreferences.horizonDays)}
+                        onChange={(event) =>
+                          updateStudyPlanPreference("horizonDays", Number(event.target.value))
+                        }
+                      >
+                        <option value="3">3 days</option>
+                        <option value="5">5 days</option>
+                        <option value="7">7 days</option>
+                        <option value="14">14 days</option>
+                      </select>
+                    </label>
+
+                    <label className="manual-study-field">
+                      <span>Pace</span>
+                      <select
+                        value={studyPlanPreferences.pace}
+                        onChange={(event) => updateStudyPlanPreference("pace", event.target.value)}
+                      >
+                        <option value="light">Light</option>
+                        <option value="balanced">Balanced</option>
+                        <option value="intensive">Intensive</option>
+                      </select>
+                    </label>
+
+                    <label className="manual-study-field">
+                      <span>Preferred time</span>
+                      <select
+                        value={studyPlanPreferences.preferredTimeOfDay}
+                        onChange={(event) =>
+                          updateStudyPlanPreference("preferredTimeOfDay", event.target.value)
+                        }
+                      >
+                        <option value="morning">Morning</option>
+                        <option value="afternoon">Afternoon</option>
+                        <option value="evening">Evening</option>
+                        <option value="late_night">Late night</option>
+                      </select>
+                    </label>
+
+                    <label className="manual-study-check">
+                      <input
+                        type="checkbox"
+                        checked={studyPlanPreferences.includeBreaks}
+                        onChange={(event) =>
+                          updateStudyPlanPreference("includeBreaks", event.target.checked)
+                        }
+                      />
+                      <span>Include breaks</span>
+                    </label>
+
+                    <label className="manual-study-check">
+                      <input
+                        type="checkbox"
+                        checked={studyPlanPreferences.weekendStudy}
+                        onChange={(event) =>
+                          updateStudyPlanPreference("weekendStudy", event.target.checked)
+                        }
+                      />
+                      <span>Include weekends</span>
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+
+              {moduleWorkflowError ? <div className="manual-note error">{moduleWorkflowError}</div> : null}
+
+              {!moduleWorkflowLoading && !selectedWorkflow ? (
+                <p className="manual-empty">
+                  Pick one output above, then generate only that item for this module.
+                </p>
+              ) : null}
+
+              {moduleWorkflowLoading ? (
+                <p className="manual-empty">Agents are building your selected output...</p>
+              ) : null}
+
+              {selectedWorkflow ? (
+                <div className="manual-agent-pack">
+                  {moduleWorkflowTarget === "video_plan" ? (
+                    <div className="manual-summary-panel">
+                      <h4>Video Plan</h4>
+                      <div className="manual-summary-content">
+                        {renderMarkdown(
+                          [
+                            selectedWorkflow.workflow?.assets?.video_plan?.reason || "",
+                            selectedWorkflow.workflow?.assets?.video_plan?.hook
+                              ? `Opening hook: ${selectedWorkflow.workflow.assets.video_plan.hook}`
+                              : "",
+                            ...(selectedWorkflow.workflow?.assets?.video_plan?.scenes || []).map(
+                              (scene, index) => `${index + 1}. ${scene}`
+                            ),
+                          ]
+                            .filter(Boolean)
+                            .join("\n")
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {moduleWorkflowTarget === "study_plan" ? (
+                    <div className="manual-summary-panel">
+                      <h4>Study Planner</h4>
+                      {(selectedWorkflow.workflow?.assets?.study_plan?.sessions || []).length ? (
+                        <div className="manual-agent-list">
+                          {selectedWorkflow.workflow.assets.study_plan.sessions.map((session, index) => (
+                            <div key={`${session.title}-${index}`} className="manual-agent-item">
+                              <strong>{session.title}</strong>
+                              <span>{formatMinutes(session.duration_minutes)} · {session.goal}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="manual-empty">No study planner output yet.</p>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {moduleWorkflowTarget === "quizzes" ? (
+                    <div className="manual-summary-panel">
+                      <h4>Quiz</h4>
+                      {(selectedWorkflow.workflow?.assets?.quiz_questions || []).length ? (
+                        <div className="manual-quiz-list">
+                          {selectedWorkflow.workflow.assets.quiz_questions.map((rawQuestion, index) => {
+                            const question = normalizeQuizQuestion(rawQuestion);
+                            const selectedOption = quizSelections[`${moduleWorkflowTarget}-${index}`] || "";
+                            const isCorrect = selectedOption && selectedOption === question.correctOption;
+                            const showFeedback = Boolean(selectedOption);
+
+                            return (
+                              <div key={`${question.question}-${index}`} className="manual-quiz-card">
+                                <div className="manual-quiz-question">
+                                  {index + 1}. {question.question}
+                                </div>
+                                <div className="manual-quiz-options">
+                                  {question.options.map((option, optionIndex) => {
+                                    const optionKey = optionLetter(optionIndex);
+                                    const isSelected = selectedOption === optionKey;
+                                    const isAnswer = question.correctOption === optionKey;
+                                    const resultClass = showFeedback
+                                      ? isAnswer
+                                        ? "correct"
+                                        : isSelected
+                                          ? "incorrect"
+                                          : ""
+                                      : "";
+                                    return (
+                                      <button
+                                        key={`${question.question}-${optionKey}`}
+                                        type="button"
+                                        className={`manual-quiz-option ${isSelected ? "selected" : ""} ${resultClass}`}
+                                        onClick={() => handleQuizSelection(moduleWorkflowTarget, index, optionKey)}
+                                      >
+                                        <span className="manual-quiz-option-key">{optionKey}</span>
+                                        <span>{option}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {showFeedback ? (
+                                  <div className={`manual-quiz-feedback ${isCorrect ? "correct" : "incorrect"}`}>
+                                    {isCorrect
+                                      ? "Correct"
+                                      : `Incorrect. Correct answer: ${question.correctOption || question.answer}`}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="manual-empty">No quiz output yet.</p>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {moduleWorkflowTarget === "flashcards" ? (
+                    <div className="manual-summary-panel">
+                      <h4>Flashcards</h4>
+                      {(selectedWorkflow.workflow?.assets?.flashcards || []).length ? (
+                        <div className="manual-agent-list">
+                          {selectedWorkflow.workflow.assets.flashcards.map((card, index) => (
+                            <div key={`${card.front}-${index}`} className="manual-agent-item">
+                              <strong>{card.front}</strong>
+                              <span>{card.back}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="manual-empty">No flashcards generated yet.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {upcomingAssignments.length ? (
             <div className="manual-card">
               <div className="manual-toolbar">
                 <div>
                   <p className="manual-section-kicker">Assignments</p>
                   <h3 className="manual-card-title">Upcoming work</h3>
                 </div>
-                <span className="manual-count-pill">{assignments.length}</span>
+                <span className="manual-count-pill">{upcomingAssignments.length}</span>
               </div>
 
               <div className="manual-table-wrap" style={{ marginTop: 16 }}>
@@ -1182,7 +1632,7 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {assignments.map((assignment) => {
+                    {upcomingAssignments.map((assignment) => {
                       const status = deadlineStatus(assignment.due_at);
                       return (
                         <tr key={assignment.id}>
@@ -1207,6 +1657,49 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {gradedAssignments.length ? (
+            <div className="manual-card">
+              <div className="manual-toolbar">
+                <div>
+                  <p className="manual-section-kicker">Assignments</p>
+                  <h3 className="manual-card-title">Graded work</h3>
+                </div>
+                <span className="manual-count-pill">{gradedAssignments.length}</span>
+              </div>
+
+              <div className="manual-table-wrap" style={{ marginTop: 16 }}>
+                <table className="manual-table">
+                  <thead>
+                    <tr>
+                      <th>Assignment</th>
+                      <th>Submitted</th>
+                      <th>Score</th>
+                      <th>Grade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gradedAssignments.map((assignment) => (
+                      <tr key={assignment.id}>
+                        <td>
+                          {assignment.html_url ? (
+                            <a href={assignment.html_url} target="_blank" rel="noreferrer">
+                              {assignment.name}
+                            </a>
+                          ) : (
+                            assignment.name
+                          )}
+                        </td>
+                        <td>{formatDate(assignment.submitted_at || assignment.due_at)}</td>
+                        <td>{formatScore(assignment.score, assignment.points_possible)}</td>
+                        <td>{assignment.grade || "-"}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

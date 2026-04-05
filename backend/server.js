@@ -27,18 +27,37 @@ const {
   generateLessonSlideAudio,
 } = require("./lib/lesson-audio");
 const {
+  assessReplyContext,
   buildReplyDraftPrompt,
   classifyMessageIntent,
+  deriveMessageCourseContext,
   getCourseFacts,
 } = require("./lib/curated-autonomous-message-agent");
 require("dotenv").config();
 
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT || 3001);
+const HOST = process.env.HOST || "127.0.0.1";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+const ALLOWED_FRONTEND_ORIGINS = Array.from(
+  new Set([
+    FRONTEND_URL,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ].filter(Boolean))
+);
 
-app.use(cors({ origin: FRONTEND_URL, credentials: true }));
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || ALLOWED_FRONTEND_ORIGINS.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error(`Origin ${origin} is not allowed by CORS`));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 ensureLessonAudioDir();
 app.use("/generated", express.static(GENERATED_ROOT));
@@ -481,9 +500,18 @@ function normalizeMatchText(value) {
     .replace(/[^a-z0-9]+/g, "");
 }
 
+function normalizePersonName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildFallbackMessageDraft(message, runtimeState) {
   const intent = classifyMessageIntent(message, runtimeState);
-  const courseFacts = getCourseFacts(runtimeState);
+  const matchedCourse = deriveMessageCourseContext(message, runtimeState);
+  const courseFacts = getCourseFacts(runtimeState, matchedCourse?.id || null);
   const text = `${message?.subject || ""}\n${message?.last_message || ""}`;
   const normalizedText = normalizeMatchText(text);
 
@@ -513,13 +541,22 @@ function buildFallbackMessageDraft(message, runtimeState) {
         : "";
     draft = `Hi, I checked Canvas and I received ${scorePart}${percentPart} on ${matchedAssignment.name}.`;
     usedState.push(`assignment score for ${matchedAssignment.name}`);
+    if (matchedCourse?.name) {
+      usedState.push(`course context from ${matchedCourse.name}`);
+    }
   } else if (intent.asksForAssignment && courseFacts.upcomingAssignments[0]) {
     const nextAssignment = courseFacts.upcomingAssignments[0];
     draft = `Hi, I checked Canvas and the next assignment I can see is ${nextAssignment.name}${nextAssignment.due_at ? `, due ${nextAssignment.due_at}` : ""}.`;
     usedState.push(`upcoming assignment ${nextAssignment.name}`);
+    if (matchedCourse?.name) {
+      usedState.push(`course context from ${matchedCourse.name}`);
+    }
   } else if (intent.isCourseRelated) {
     draft = "Hi, I checked Canvas and I can see the course details there. I can share the exact item once I confirm which assignment or grade you mean.";
     usedState.push("course-aware Canvas workspace state");
+    if (matchedCourse?.name) {
+      usedState.push(`course context from ${matchedCourse.name}`);
+    }
   }
 
   return {
@@ -1144,6 +1181,23 @@ async function enrichConversationAuthor(conversation, accessToken, currentUser =
         .filter((participant) => participant?.id !== undefined && participant?.id !== null)
         .map((participant) => [String(participant.id), participant])
     );
+    const rawContextCode =
+      detail?.context_code ||
+      detail?.contextCode ||
+      detail?.context_name ||
+      detail?.contextName ||
+      latestMessage?.context_code ||
+      latestMessage?.contextCode ||
+      null;
+    const contextCode = rawContextCode ? String(rawContextCode) : null;
+    const contextName =
+      detail?.context_name ||
+      detail?.contextName ||
+      latestMessage?.context_name ||
+      latestMessage?.contextName ||
+      null;
+    const courseIdMatch = contextCode?.match(/course[_\s-]?(\d+)/i);
+    const contextCourseId = courseIdMatch?.[1] ? String(courseIdMatch[1]) : null;
 
     const lastAuthorId =
       latestMessage?.author_id !== undefined && latestMessage?.author_id !== null
@@ -1156,19 +1210,39 @@ async function enrichConversationAuthor(conversation, accessToken, currentUser =
       (lastAuthorId ? participantById.get(lastAuthorId)?.name : null) ||
       conversation.last_authored_message_author ||
       null;
-    const sentByCurrentUser =
-      lastAuthorId && currentUser?.id ? String(currentUser.id) === String(lastAuthorId) : false;
+    const sentByCurrentUser = Boolean(
+      (lastAuthorId && currentUser?.id && String(currentUser.id) === String(lastAuthorId)) ||
+      (currentUser?.name &&
+        lastAuthorName &&
+        normalizePersonName(currentUser.name) === normalizePersonName(lastAuthorName))
+    );
+    const counterpart =
+      participants.find(
+        (participant) =>
+          participant &&
+          participant.id !== undefined &&
+          participant.id !== null &&
+          (!currentUser?.id || String(participant.id) !== String(currentUser.id))
+      ) || null;
 
     return {
       last_author_id: lastAuthorId,
       last_author_name: lastAuthorName,
       sent_by_current_user: sentByCurrentUser,
+      counterpart_name: counterpart?.name || counterpart?.display_name || null,
+      context_code: contextCode,
+      context_name: contextName ? String(contextName) : null,
+      course_id: contextCourseId,
     };
   } catch {
     return {
       last_author_id: null,
       last_author_name: conversation.last_authored_message_author || null,
       sent_by_current_user: false,
+      counterpart_name: null,
+      context_code: null,
+      context_name: null,
+      course_id: null,
     };
   }
 }
@@ -1194,6 +1268,10 @@ async function buildInboxState(accessToken, currentUser = null) {
       last_author_id: authorMeta[index]?.last_author_id || null,
       last_author_name: authorMeta[index]?.last_author_name || null,
       sent_by_current_user: Boolean(authorMeta[index]?.sent_by_current_user),
+      counterpart_name: authorMeta[index]?.counterpart_name || null,
+      context_code: authorMeta[index]?.context_code || null,
+      context_name: authorMeta[index]?.context_name || null,
+      course_id: authorMeta[index]?.course_id || null,
       workflow_state: conversation.workflow_state || null,
     })),
   };
@@ -1292,13 +1370,70 @@ async function ensureTopicText(courseId, topic, accessToken) {
   return text;
 }
 
+async function ensureModuleText(courseId, module, accessToken) {
+  if (!module) {
+    return "";
+  }
+
+  const pdfItems = (module.items || [])
+    .filter((item) => item?.type === "File" && item?.is_pdf)
+    .slice(0, 8);
+
+  if (!pdfItems.length) {
+    return "";
+  }
+
+  const excerpts = [];
+  for (const item of pdfItems) {
+    try {
+      const fileId = String(item.id || item.content_id || "");
+      if (!fileId) {
+        continue;
+      }
+
+      let text = textCache.get(fileId);
+      if (!text) {
+        const file = await canvasRequest(`/courses/${courseId}/files/${fileId}`, accessToken);
+        if (!file?.url) {
+          continue;
+        }
+        const buffer = await downloadCanvasFile(file.url, accessToken);
+        const pdfData = await pdf(buffer);
+        text = String(pdfData.text || "").trim();
+        if (text) {
+          textCache.set(fileId, text);
+        }
+      }
+
+      if (text) {
+        excerpts.push(`--- ${item.display_name || `PDF ${fileId}`} ---\n${text.slice(0, 6000)}`);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return excerpts.join("\n\n").slice(0, 18000);
+}
+
 function buildWorkflowPrompt({ workflowType, runtimeState }) {
-  const state = runtimeState.canvas.courseState;
+  const state = runtimeState.canvas.courseState || {};
+  const safeCourse = state.course || {
+    id: runtimeState.request?.courseId || null,
+    name: "Selected course",
+    code: "",
+  };
   const selectedModule = runtimeState.canvas.selectedModule;
   const selectedTopic = runtimeState.canvas.selectedTopic;
   const topicText = runtimeState.canvas.topicText;
+  const moduleText = runtimeState.canvas.moduleText;
   const preferences = runtimeState.memory.preferences;
-  const dueSoon = runtimeState.canvas.signals.dueSoon;
+  const studyPlanPreferences = preferences?.studyPlan || {};
+  const moduleStudyTopics = extractModuleStudyTopics(moduleText);
+  const generationTargets = Array.isArray(runtimeState.request?.generationTargets)
+    ? runtimeState.request.generationTargets.filter(Boolean)
+    : [];
+  const dueSoon = runtimeState.canvas.signals?.dueSoon || [];
   const workflowLabels = {
     course_brief: "course command brief",
     module_mastery: "module mastery pack",
@@ -1343,7 +1478,13 @@ Return ONLY valid JSON with this exact shape:
       ]
     },
     "quiz_questions": [
-      { "question": "text", "answer": "text", "difficulty": "easy | medium | hard" }
+      {
+        "question": "text",
+        "options": ["option A", "option B", "option C", "option D"],
+        "correct_answer": "A | B | C | D",
+        "explanation": "short explanation",
+        "difficulty": "easy | medium | hard"
+      }
     ],
     "flashcards": [
       { "front": "text", "back": "text" }
@@ -1416,6 +1557,9 @@ Rules:
 - Keep outputs concise but high signal.
 - study_plan should feel actionable and time-boxed.
 - quiz_questions: 4 to 6 items.
+- Each quiz question must have exactly 4 options.
+- correct_answer must be only one letter: A, B, C, or D.
+- Do not reveal the correct answer inside the option text itself.
 - flashcards: 4 to 8 items.
 - curated_resources should recommend targeted learning support based on student state.
 - stages must reflect a real workflow.
@@ -1429,24 +1573,32 @@ Rules:
 - agent_handoffs must show how one agent activates another in response to the student's situation.
 - support_plan must explain how the system helps the student rebound after weak performance.
 - Adapt to the student preference.
+- If generation targets are provided, fully populate only those requested assets and keep unrequested assets empty or minimal.
+- When generating a study plan, honor the study plan preferences for daily time, session length, pace, preferred time of day, breaks, and weekend availability.
+- When generating a study plan for a selected module, use the actual concepts from the module/PDF text.
+- Never use placeholders like "core concept 1", "topic 2", or "section 3".
+- Each study session title and goal must mention a concrete topic, term, process, or concept from the module materials.
 
 Workflow requested: ${workflowLabel}
 Student preference: ${preferences?.studyStyle || "visual"}
+Requested assets: ${generationTargets.length ? generationTargets.join(", ") : "full pack"}
+Study plan preferences: ${JSON.stringify(studyPlanPreferences, null, 2)}
+Module topic hints: ${JSON.stringify(moduleStudyTopics, null, 2)}
 
 Canvas course state:
 ${JSON.stringify({
-    course: state.course,
-    stats: state.stats,
+    course: safeCourse,
+    stats: state.stats || null,
     dueSoon,
     performance: {
-      gradedAssignments: runtimeState.canvas.signals.lowScores,
+      gradedAssignments: runtimeState.canvas.signals?.lowScores || [],
     },
     selectedModule: selectedModule
       ? {
           id: selectedModule.id,
           name: selectedModule.name,
           items_count: selectedModule.items_count,
-          items: selectedModule.items.slice(0, 15).map((item) => ({
+          items: (selectedModule.items || []).slice(0, 15).map((item) => ({
             id: item.id,
             display_name: item.display_name,
             type: item.type,
@@ -1473,11 +1625,110 @@ ${JSON.stringify({
     },
   }, null, 2)}
 
+${moduleText ? `Professor-posted module material excerpt:\n${moduleText.slice(0, 18000)}` : "No extracted module text was available."}
+
 ${topicText ? `Professor-posted topic material excerpt:\n${topicText.slice(0, 18000)}` : "No extracted topic text was available."}`;
 }
 
+function extractModuleStudyTopics(moduleText = "") {
+  const text = String(moduleText || "");
+  if (!text) {
+    return [];
+  }
+
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const seen = new Set();
+  const topics = [];
+
+  for (const line of lines) {
+    if (line.length < 8 || line.length > 90) {
+      continue;
+    }
+    if (/[.!?]{2,}/.test(line)) {
+      continue;
+    }
+    const normalized = line
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    if (/\b(page|copyright|figure|table|module|chapter)\b/.test(normalized)) {
+      continue;
+    }
+    if (normalized.split(" ").length > 10) {
+      continue;
+    }
+
+    seen.add(normalized);
+    topics.push(line.replace(/^[-*•\d.\s]+/, "").trim());
+    if (topics.length >= 8) {
+      break;
+    }
+  }
+
+  return topics;
+}
+
+function usesPlaceholderStudyLanguage(value = "") {
+  const normalized = String(value || "").toLowerCase();
+  return /core concept\s*\d|topic\s*\d|concept\s*\d|section\s*\d|study block\s*\d/.test(normalized);
+}
+
+function sanitizeStudyPlanWithModuleTopics(parsed, runtimeState) {
+  const studyPlan = parsed?.assets?.study_plan;
+  if (!studyPlan || !Array.isArray(studyPlan.sessions) || !studyPlan.sessions.length) {
+    return parsed;
+  }
+
+  const moduleTopics = extractModuleStudyTopics(runtimeState?.canvas?.moduleText || "");
+  if (!moduleTopics.length) {
+    return parsed;
+  }
+
+  const nextSessions = studyPlan.sessions.map((session, index) => {
+    const fallbackTopic = moduleTopics[index % moduleTopics.length];
+    const titleNeedsReplacement = usesPlaceholderStudyLanguage(session?.title);
+    const goalNeedsReplacement = usesPlaceholderStudyLanguage(session?.goal);
+
+    if (!titleNeedsReplacement && !goalNeedsReplacement) {
+      return session;
+    }
+
+    return {
+      ...session,
+      title: titleNeedsReplacement ? `Review ${fallbackTopic}` : session.title,
+      goal: goalNeedsReplacement
+        ? `Understand ${fallbackTopic} from the module materials and notes.`
+        : session.goal,
+    };
+  });
+
+  return {
+    ...parsed,
+    assets: {
+      ...(parsed.assets || {}),
+      study_plan: {
+        ...studyPlan,
+        sessions: nextSessions,
+      },
+    },
+  };
+}
+
 function buildPlannerPrompt({ workflowType, runtimeState }) {
-  const state = runtimeState.canvas.courseState;
+  const state = runtimeState.canvas.courseState || {};
+  const safeCourse = state.course || {
+    id: runtimeState.request?.courseId || null,
+    name: "Selected course",
+    code: "",
+  };
   const selectedModule = runtimeState.canvas.selectedModule;
   const selectedTopic = runtimeState.canvas.selectedTopic;
   const preferences = runtimeState.memory.preferences;
@@ -1500,12 +1751,12 @@ Return ONLY valid JSON:
 }
 
 Student preference: ${preferences?.studyStyle || "visual"}
-Course: ${state.course.name}
-Stats: ${JSON.stringify(state.stats)}
+Course: ${safeCourse.name}
+Stats: ${JSON.stringify(state.stats || {})}
 Selected module: ${selectedModule ? selectedModule.name : "none"}
 Selected topic: ${selectedTopic ? selectedTopic.display_name : "none"}
-Recent event triggers: ${JSON.stringify(runtimeState.telemetry.eventSignals.dominantTriggers)}
-Queue state: ${JSON.stringify(runtimeState.telemetry.queueSignals)}
+Recent event triggers: ${JSON.stringify(runtimeState.telemetry.eventSignals?.dominantTriggers || [])}
+Queue state: ${JSON.stringify(runtimeState.telemetry.queueSignals || {})}
 Current intervention: ${JSON.stringify(runtimeState.intelligence.intervention)}`;
 }
 
@@ -1531,6 +1782,7 @@ const workflowGraph = new StateGraph(WorkflowGraphState)
       buildWorkspaceState,
       buildInboxState,
       ensureTopicText,
+      ensureModuleText,
       computeInterventionScore,
     });
 
@@ -1572,6 +1824,108 @@ You are now the specialist agent team. Use the planner output to finalize the wo
   .addEdge("planner_agent", "specialist_agents")
   .addEdge("specialist_agents", END)
   .compile();
+
+async function generateWorkflowFromRuntimeState({
+  runtimeState,
+  request,
+  sessionContext,
+}) {
+  const plannerResponse = await createOpenAIResponse({
+    model: OPENAI_MODEL_AGENT,
+    input: buildPlannerPrompt({
+      workflowType: request.workflowType,
+      runtimeState,
+    }),
+  });
+
+  const plannerOutput = safeJsonParseObject(extractResponseText(plannerResponse) || "");
+  const specialistResponse = await createOpenAIResponse({
+    model: OPENAI_MODEL_AGENT,
+    input: `${buildWorkflowPrompt({
+      workflowType: request.workflowType,
+      runtimeState,
+    })}
+
+Planner output:
+${JSON.stringify(plannerOutput, null, 2)}
+
+You are now the specialist agent team. Use the planner output to finalize the workflow response.`,
+  });
+
+  const parsed = safeJsonParseObject(extractResponseText(specialistResponse) || "");
+  return buildWorkflowResponse({
+    runtimeState,
+    plannerOutput,
+    parsed,
+    request,
+    sessionContext,
+  });
+}
+
+function buildWorkflowResponse({
+  runtimeState,
+  plannerOutput,
+  parsed,
+  request,
+  sessionContext,
+}) {
+  const state = runtimeState.canvas.courseState || {};
+  const safeCourse = state.course || {
+    id: request.courseId || null,
+    name: "Selected course",
+    code: "",
+  };
+  const selectedModule = runtimeState.canvas.selectedModule;
+  const selectedTopic = runtimeState.canvas.selectedTopic;
+  const runId = crypto.randomBytes(12).toString("hex");
+  const sanitizedParsed = sanitizeStudyPlanWithModuleTopics(parsed, runtimeState);
+
+  return {
+    runId,
+    sessionId: sessionContext.sessionId,
+    userId: sessionContext.userId,
+    status: "completed",
+    createdAt: new Date().toISOString(),
+    courseId: request.courseId,
+    moduleId: request.moduleId || null,
+    topicId: request.topicId || null,
+    workflowType: request.workflowType,
+    canvasState: {
+      syncedAt: state?.syncedAt || new Date().toISOString(),
+      course: safeCourse,
+      stats: state?.stats || null,
+      upcomingAssignments: (state?.assignments || [])
+        .filter((assignment) => assignment.due_at && !assignment.is_completed)
+        .sort((a, b) => new Date(a.due_at) - new Date(b.due_at))
+        .slice(0, 5),
+      gradedAssignments: (state?.assignments || [])
+        .filter((assignment) => assignment.score !== null && assignment.score !== undefined)
+        .sort((a, b) => new Date(b.submitted_at || b.due_at || 0) - new Date(a.submitted_at || a.due_at || 0))
+        .slice(0, 5),
+    },
+    runtimeState: {
+      meta: runtimeState.meta,
+      request: runtimeState.request,
+      memory: runtimeState.memory,
+      telemetry: runtimeState.telemetry,
+      intelligence: runtimeState.intelligence,
+      agentRegistry: runtimeState.agentRegistry,
+      canvas: {
+        selectedModule,
+        selectedTopic,
+        signals: runtimeState.canvas.signals,
+        inboxState: runtimeState.canvas.inboxState,
+        courseState: {
+          syncedAt: state?.syncedAt || new Date().toISOString(),
+          course: state?.course || null,
+          stats: state?.stats || null,
+        },
+      },
+    },
+    planner: plannerOutput,
+    workflow: sanitizedParsed,
+  };
+}
 
 attachMcpHttpRoutes(app, {
   db,
@@ -2137,10 +2491,12 @@ app.get("/api/langgraph/runtime-state", async (req, res) => {
       accessToken,
       sessionId: context.sessionId,
       userId: context.userId,
+      currentUser: context.session?.user || null,
       listActiveCanvasCourses,
       buildWorkspaceState,
       buildInboxState,
       ensureTopicText,
+      ensureModuleText,
       computeInterventionScore,
     });
 
@@ -2202,8 +2558,13 @@ app.get("/api/messages", async (req, res) => {
 
 app.post("/api/messages/:messageId/draft-reply", async (req, res) => {
   try {
+    const { extraContext = "" } = req.body || {};
     const accessToken = getCanvasAccessToken(req);
     const sessionContext = getSessionContext(req);
+    const liveInbox = await buildInboxState(accessToken, sessionContext.session?.user || null).catch(() => ({
+      syncedAt: new Date().toISOString(),
+      messages: [],
+    }));
     const runtimeState = await buildLangGraphRuntimeState({
       db,
       request: {
@@ -2213,18 +2574,38 @@ app.post("/api/messages/:messageId/draft-reply", async (req, res) => {
       accessToken,
       sessionId: sessionContext.sessionId,
       userId: sessionContext.userId,
+      currentUser: sessionContext.session?.user || null,
       listActiveCanvasCourses,
       buildWorkspaceState,
       buildInboxState,
       ensureTopicText,
+      ensureModuleText,
       computeInterventionScore,
     });
-    const message = (runtimeState?.canvas?.inboxState?.messages || []).find(
-      (item) => String(item.id) === String(req.params.messageId)
-    );
+    const messageId = String(req.params.messageId);
+    const runtimeMessages = runtimeState?.canvas?.inboxState?.messages || [];
+    const message =
+      runtimeMessages.find((item) => String(item.id) === messageId) ||
+      (liveInbox.messages || []).find((item) => String(item.id) === messageId);
 
     if (!message) {
       return res.status(404).json({ error: "Message not found in inbox" });
+    }
+
+    const contextAssessment = assessReplyContext(message, runtimeState, extraContext);
+    if (contextAssessment.requiresClarification) {
+      return res.json({
+        messageId: message.id,
+        subject: message.subject,
+        summary: "More context is needed before drafting a safe reply.",
+        classification: classifyMessageIntent(message, runtimeState),
+        whyThisReply: ["The message does not include enough course-specific detail to answer safely."],
+        usedState: [],
+        requiresClarification: true,
+        clarificationQuestion: contextAssessment.clarificationQuestion,
+        missingContext: contextAssessment.missingContext,
+        draft: "",
+      });
     }
 
     let payload;
@@ -2235,6 +2616,7 @@ app.post("/api/messages/:messageId/draft-reply", async (req, res) => {
           message,
           runtimeState,
           preferences: runtimeState?.memory?.preferences || {},
+          extraContext,
         }),
       });
       payload = safeJsonParseObject(extractResponseText(response) || "");
@@ -2249,6 +2631,9 @@ app.post("/api/messages/:messageId/draft-reply", async (req, res) => {
       classification: payload.classification || null,
       whyThisReply: payload.whyThisReply || [],
       usedState: payload.usedState || [],
+      requiresClarification: Boolean(payload.requiresClarification),
+      clarificationQuestion: payload.clarificationQuestion || "",
+      missingContext: payload.missingContext || [],
       draft: payload.draft || "",
     });
   } catch (err) {
@@ -2802,7 +3187,14 @@ ${combined}`,
 });
 
 app.post("/api/agentic-workflow", async (req, res) => {
-  const { courseId, moduleId, topicId, workflowType = "course_brief", preferences = {} } = req.body || {};
+  const {
+    courseId,
+    moduleId,
+    topicId,
+    workflowType = "course_brief",
+    preferences = {},
+    generationTargets = [],
+  } = req.body || {};
   if (!courseId) {
     return res.status(400).json({ error: "courseId is required" });
   }
@@ -2815,9 +3207,9 @@ app.post("/api/agentic-workflow", async (req, res) => {
       workflowType,
       moduleId,
       topicId,
+      generationTargets,
     });
     const accessToken = getCanvasAccessToken(req);
-    const runId = crypto.randomBytes(12).toString("hex");
     const sessionContext = getSessionContext(req);
     const graphState = await workflowGraph.invoke({
       request: {
@@ -2826,66 +3218,34 @@ app.post("/api/agentic-workflow", async (req, res) => {
         topicId: topicId || null,
         workflowType,
         preferences,
+        generationTargets,
       },
       accessToken,
       sessionId: sessionContext.sessionId,
       userId: sessionContext.userId,
     });
-
-    const runtimeState = graphState.runtimeState;
-    const state = runtimeState.canvas.courseState;
-    const selectedModule = runtimeState.canvas.selectedModule;
-    const selectedTopic = runtimeState.canvas.selectedTopic;
-    const parsed = graphState.workflowResult;
-    const workflow = {
-      runId,
-      sessionId: sessionContext.sessionId,
-      userId: sessionContext.userId,
-      status: "completed",
-      createdAt: new Date().toISOString(),
-      courseId,
-      moduleId: moduleId || null,
-      topicId: topicId || null,
-      workflowType,
-      canvasState: {
-        syncedAt: state.syncedAt,
-        course: state.course,
-        stats: state.stats,
-        upcomingAssignments: state.assignments
-          .filter((assignment) => assignment.due_at && !assignment.is_completed)
-          .sort((a, b) => new Date(a.due_at) - new Date(b.due_at))
-          .slice(0, 5),
+    const workflow = buildWorkflowResponse({
+      runtimeState: graphState.runtimeState,
+      plannerOutput: graphState.plannerOutput,
+      parsed: graphState.workflowResult,
+      request: {
+        courseId,
+        moduleId: moduleId || null,
+        topicId: topicId || null,
+        workflowType,
+        preferences,
+        generationTargets,
       },
-      runtimeState: {
-        meta: runtimeState.meta,
-        request: runtimeState.request,
-        memory: runtimeState.memory,
-        telemetry: runtimeState.telemetry,
-        intelligence: runtimeState.intelligence,
-        agentRegistry: runtimeState.agentRegistry,
-        canvas: {
-          selectedModule,
-          selectedTopic,
-          signals: runtimeState.canvas.signals,
-          inboxState: runtimeState.canvas.inboxState,
-          courseState: {
-            syncedAt: state.syncedAt,
-            course: state.course,
-            stats: state.stats,
-          },
-        },
-      },
-      planner: graphState.plannerOutput,
-      workflow: parsed,
-    };
+      sessionContext,
+    });
 
-    workflowRunStore.set(runId, workflow);
+    workflowRunStore.set(workflow.runId, workflow);
     saveWorkflowRunRecord(workflow);
     saveDerivedIntelligence(workflow);
     logActivity(req, "workflow_completed", {
       path: req.path,
       entityType: "workflow_run",
-      entityId: runId,
+      entityId: workflow.runId,
       workflowType,
       courseId,
       moduleId,
@@ -2894,6 +3254,149 @@ app.post("/api/agentic-workflow", async (req, res) => {
     res.json(workflow);
   } catch (err) {
     res.status(500).json({ error: `Agentic workflow failed: ${err.message}` });
+  }
+});
+
+app.post("/api/local-pdf-workflow", async (req, res) => {
+  const {
+    courseId,
+    fileName,
+    fileData,
+    workflowType = "topic_deep_dive",
+    preferences = {},
+  } = req.body || {};
+
+  if (!courseId) {
+    return res.status(400).json({ error: "courseId is required" });
+  }
+
+  if (!fileName || !fileData) {
+    return res.status(400).json({ error: "fileName and fileData are required" });
+  }
+
+  try {
+    const context = getSessionContext(req);
+    if (!context.userId) {
+      return res.status(401).json({ error: "No authenticated session" });
+    }
+
+    const accessToken = getCanvasAccessToken(req);
+    const runtimeState = await buildLangGraphRuntimeState({
+      db,
+      request: {
+        courseId,
+        moduleId: null,
+        topicId: null,
+        workflowType,
+        preferences,
+      },
+      accessToken,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      currentUser: context.session?.user || null,
+      listActiveCanvasCourses,
+      buildWorkspaceState,
+      buildInboxState,
+      ensureTopicText,
+      ensureModuleText,
+      computeInterventionScore,
+    });
+
+    const buffer = Buffer.from(String(fileData), "base64");
+    const parsedPdf = await pdf(buffer);
+    const extractedText = String(parsedPdf.text || "").trim();
+    if (!extractedText) {
+      return res.status(400).json({ error: "No extractable text found in this PDF." });
+    }
+
+    const syntheticTopicId = `local-pdf-${crypto.randomBytes(6).toString("hex")}`;
+    const selectedTopic = {
+      id: syntheticTopicId,
+      display_name: String(fileName),
+      type: "File",
+      is_pdf: true,
+      source: "local_upload_test",
+    };
+    const selectedModule = {
+      id: "local-upload-tests",
+      name: "Local PDF Test Uploads",
+      items_count: 1,
+    };
+
+    runtimeState.request = {
+      ...runtimeState.request,
+      topicId: syntheticTopicId,
+      workflowType,
+      preferences: {
+        ...(runtimeState.request?.preferences || {}),
+        ...(preferences || {}),
+      },
+    };
+    runtimeState.canvas = {
+      ...runtimeState.canvas,
+      selectedModule,
+      selectedTopic,
+      topicText: extractedText,
+      signals: {
+        ...(runtimeState.canvas?.signals || {}),
+        newMaterialCount: (runtimeState.canvas?.signals?.newMaterialCount || 0) + 1,
+      },
+    };
+    runtimeState.llmContext = {
+      ...(runtimeState.llmContext || {}),
+      selectedModule: {
+        id: selectedModule.id,
+        name: selectedModule.name,
+        items_count: selectedModule.items_count,
+      },
+      selectedTopic: {
+        id: selectedTopic.id,
+        display_name: selectedTopic.display_name,
+        type: selectedTopic.type,
+        is_pdf: true,
+      },
+      topicTextExcerpt: extractedText.slice(0, 18000),
+    };
+
+    logActivity(req, "local_pdf_workflow_requested", {
+      path: req.path,
+      entityType: "course",
+      entityId: courseId,
+      workflowType,
+      fileName,
+      source: "local_upload_test",
+    });
+
+    const workflow = await generateWorkflowFromRuntimeState({
+      runtimeState,
+      request: {
+        courseId,
+        moduleId: null,
+        topicId: syntheticTopicId,
+        workflowType,
+        preferences,
+      },
+      sessionContext: context,
+    });
+
+    workflow.source = "local_upload_test";
+    workflow.testMaterial = {
+      id: syntheticTopicId,
+      fileName: String(fileName),
+      courseId: String(courseId),
+      courseName: runtimeState.canvas?.courseState?.course?.name || `Course ${courseId}`,
+      moduleId: selectedModule.id,
+      moduleName: selectedModule.name,
+      createdAt: new Date().toISOString(),
+      subtitle: "Local PDF uploaded for autonomous testing",
+    };
+
+    workflowRunStore.set(workflow.runId, workflow);
+    saveWorkflowRunRecord(workflow);
+    saveDerivedIntelligence(workflow);
+    res.json(workflow);
+  } catch (err) {
+    res.status(500).json({ error: `Local PDF workflow failed: ${err.message}` });
   }
 });
 
@@ -3780,10 +4283,27 @@ app.delete("/api/quizzes/:quizId", (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend running → http://localhost:${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Backend running → http://${HOST}:${PORT}`);
   console.log("Canvas auth mode: session token from successful login");
   console.log(
     `OpenAI key: ${process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "your_openai_api_key_here" ? "loaded" : "MISSING – set OPENAI_API_KEY in .env for AI features"}`
   );
+});
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`Backend could not start: port ${PORT} is already in use.`);
+    process.exit(1);
+  }
+
+  if (err.code === "EPERM") {
+    console.error(
+      `Backend could not bind to ${HOST}:${PORT}. Try HOST=127.0.0.1 npm --prefix backend run start or choose a different PORT.`
+    );
+    process.exit(1);
+  }
+
+  console.error("Backend startup failed:", err.message);
+  process.exit(1);
 });

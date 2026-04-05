@@ -157,6 +157,31 @@
   font-weight: 600;
 }
 
+.agent-clarification-box {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: #fff7ed;
+  border: 1px solid rgba(249, 115, 22, 0.18);
+}
+
+.agent-clarification-box strong {
+  color: #9a3412;
+}
+
+.agent-clarification-input {
+  min-height: 92px;
+  width: 100%;
+  border: 1px solid #fed7aa;
+  border-radius: 14px;
+  padding: 12px 14px;
+  resize: vertical;
+  font: inherit;
+  color: #431407;
+  background: #ffffff;
+}
+
 .agent-actions {
   display: flex;
   gap: 12px;

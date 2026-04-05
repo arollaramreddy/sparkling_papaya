@@ -297,10 +297,12 @@ async function buildLangGraphRuntimeState({
   accessToken,
   sessionId,
   userId,
+  currentUser = null,
   listActiveCanvasCourses,
   buildWorkspaceState,
   buildInboxState,
   ensureTopicText,
+  ensureModuleText,
   computeInterventionScore,
 }) {
   const courseId = request.courseId || null;
@@ -312,7 +314,10 @@ async function buildLangGraphRuntimeState({
 
   const [activeCourses, inboxState] = await Promise.all([
     listActiveCanvasCourses(accessToken).catch(() => []),
-    buildInboxState(accessToken).catch(() => ({ syncedAt: new Date().toISOString(), messages: [] })),
+    buildInboxState(accessToken, currentUser).catch(() => ({
+      syncedAt: new Date().toISOString(),
+      messages: [],
+    })),
   ]);
   const workspaceCourses = courseId
     ? [{ id: String(courseId) }, ...activeCourses.filter((course) => String(course.id) !== String(courseId))]
@@ -337,6 +342,10 @@ async function buildLangGraphRuntimeState({
   const topicText =
     courseState && selectedTopic
       ? await ensureTopicText(courseId, selectedTopic, accessToken).catch(() => "")
+      : "";
+  const moduleText =
+    courseState && selectedModule
+      ? await ensureModuleText(courseId, selectedModule, accessToken).catch(() => "")
       : "";
 
   const courseEvents = userId ? listRecentEvents(db, userId, courseId, 25) : [];
@@ -385,6 +394,7 @@ async function buildLangGraphRuntimeState({
       selectedModule,
       selectedTopic,
       topicText,
+      moduleText,
       signals: canvasSignals,
     },
     memory: {
@@ -460,6 +470,7 @@ async function buildLangGraphRuntimeState({
       })),
       learningGaps: learningGaps.slice(0, 8),
       recommendations: intervention?.recommendations || [],
+      moduleTextExcerpt: moduleText ? moduleText.slice(0, 18000) : "",
       topicTextExcerpt: topicText ? topicText.slice(0, 18000) : "",
     },
   };

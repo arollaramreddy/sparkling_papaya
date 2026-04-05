@@ -1,4 +1,6 @@
-const API = "http://localhost:3001/api";
+import { getApiBase } from "../apiBase";
+
+const API = getApiBase();
 
 async function fetchJson(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -55,26 +57,84 @@ function normalizeName(value) {
     .trim();
 }
 
-function messageMatchesUser(message, currentUserName) {
-  if (!currentUserName) return true;
-
-  if (message?.sent_by_current_user) {
-    return true;
+function deriveMessageCourseContext(message, runtimeState) {
+  const courses = runtimeState?.canvas?.normalizedWorkspace?.courses || [];
+  const assignments = runtimeState?.canvas?.normalizedWorkspace?.assignments || [];
+  const normalizedMessage = normalizeName(
+    `${message?.subject || ""}\n${message?.last_message || ""}`
+  );
+  const directCourseId = message?.course_id ? String(message.course_id) : "";
+  if (directCourseId) {
+    const directCourse = courses.find((course) => String(course.id) === directCourseId);
+    if (directCourse) {
+      return directCourse;
+    }
   }
 
-  const normalizedUser = normalizeName(currentUserName);
-  if (!normalizedUser) return true;
+  const contextHints = [
+    normalizeName(message?.context_name || ""),
+    normalizeName(message?.context_code || ""),
+  ].filter(Boolean);
+
+  if (contextHints.length) {
+    const contextMatches = courses.filter((course) => {
+      const name = normalizeName(course.name || "");
+      const code = normalizeName(course.code || "");
+      return contextHints.some((hint) => hint === name || hint === code || (name && hint.includes(name)) || (code && hint.includes(code)));
+    });
+
+    if (contextMatches.length === 1) {
+      return contextMatches[0];
+    }
+  }
+
+  const explicitCourseMatches = courses.filter((course) => {
+    const name = normalizeName(course.name || "");
+    const code = normalizeName(course.code || "");
+    return (name && normalizedMessage.includes(name)) || (code && normalizedMessage.includes(code));
+  });
+
+  if (explicitCourseMatches.length === 1) {
+    return explicitCourseMatches[0];
+  }
+
+  const assignmentMatches = assignments.filter((assignment) => {
+    const assignmentName = normalizeName(assignment.name || "");
+    return assignmentName && normalizedMessage.includes(assignmentName);
+  });
+
+  const assignmentCourseIds = Array.from(
+    new Set(assignmentMatches.map((assignment) => String(assignment.course_id || "")))
+  ).filter(Boolean);
+
+  if (assignmentCourseIds.length === 1) {
+    return courses.find((course) => String(course.id) === assignmentCourseIds[0]) || null;
+  }
+
+  return null;
+}
+
+function messageMatchesUser(message, currentUserName) {
+  const allowedSenders = ["ramreddy arolla"];
+  if (message?.sent_by_current_user) {
+    return false;
+  }
 
   const senderName = normalizeName(message?.last_author_name || message?.author_name || "");
-  if (!senderName) return false;
+  if (senderName) {
+    return allowedSenders.includes(senderName);
+  }
 
-  return senderName === normalizedUser;
+  if (!currentUserName) return false;
+
+  const normalizedUser = normalizeName(currentUserName);
+  return Boolean(normalizedUser) && allowedSenders.includes(normalizedUser);
 }
 
 function buildFeed(runtimeState, preferences = {}, rawMessages = [], currentUserName = "") {
   const runtimeMessages = runtimeState?.canvas?.inboxState?.messages || [];
   const messageMap = new Map();
-  [...rawMessages, ...runtimeMessages].forEach((message) => {
+  [...runtimeMessages, ...rawMessages].forEach((message) => {
     if (!message?.id) return;
     messageMap.set(String(message.id), message);
   });
@@ -85,11 +145,16 @@ function buildFeed(runtimeState, preferences = {}, rawMessages = [], currentUser
 
   return messages.slice(0, 12).map((message) => {
     const intent = classifyMessageIntent(message, runtimeState);
+    const matchedCourse = deriveMessageCourseContext(message, runtimeState);
     return {
       id: message.id,
       type: "message",
       title: message.subject || "Message",
-      subtitle: message.last_author_name || "Inbox",
+      subtitle:
+        matchedCourse?.name ||
+        message.counterpart_name ||
+        message.last_author_name ||
+        "Inbox",
       createdAt: message.last_message_at || runtimeState?.meta?.generatedAt || null,
       status: intent.needsReply ? "draft_ready" : "watching",
       priority:
@@ -99,6 +164,7 @@ function buildFeed(runtimeState, preferences = {}, rawMessages = [], currentUser
             ? "normal"
             : "low",
       intent,
+      matchedCourse,
       rawMessage: message,
       replyPreferences,
     };
@@ -155,10 +221,17 @@ async function runAgenticWorkflow(payload) {
   });
 }
 
-async function draftReply(messageId) {
+async function runLocalPdfWorkflow(payload) {
+  return fetchJson("/local-pdf-workflow", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function draftReply(messageId, extraContext = "") {
   return fetchJson(`/messages/${messageId}/draft-reply`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ extraContext }),
   });
 }
 
@@ -178,6 +251,7 @@ export {
   loadStateEvents,
   messageMatchesUser,
   runAgenticWorkflow,
+  runLocalPdfWorkflow,
   runAutonomousMonitor,
   savePreferences,
   sendReply,
