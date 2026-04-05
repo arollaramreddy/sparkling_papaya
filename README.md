@@ -1,10 +1,10 @@
 # Canvas Study Assistant
 
-Canvas Study Assistant is a full-stack project that connects to Canvas, lets a student browse their courses, and uses AI to turn course PDFs into summaries, study notes, module overviews, agent-driven study plans, and narrated lesson slides.
+Canvas Study Assistant is a full-stack project that connects to Canvas, lets a student log in with a Canvas personal access token, and uses AI to turn course PDFs into summaries, study notes, module overviews, agent-driven study plans, and narrated lesson slides.
 
 ## What the project does
 
-- Connects to Canvas with a personal access token
+- Connects to Canvas from a successful token login in the UI
 - Lists active courses as clickable cards
 - Opens each course in its own detail view
 - Shows modules, assignments, and uploaded files
@@ -25,12 +25,13 @@ backend/    Express API for Canvas + AI features
 Create `backend/.env` with:
 
 ```env
-CANVAS_TOKEN=your_canvas_token_here
 CANVAS_BASE_URL=https://canvas.asu.edu/api/v1
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here
+FRONTEND_URL=http://localhost:5173
+BACKEND_URL=http://localhost:3001
 ```
 
-If you already keep secrets in the repo-root `.env`, make sure the backend env matches the values you want to use at runtime.
+You do not need to put a Canvas personal access token in `backend/.env`. The app stores the Canvas token only after a successful login from the frontend.
 
 ## Install
 
@@ -76,7 +77,7 @@ npm run lint
 
 - The root `package.json` is just a workspace-style command wrapper; frontend and backend dependencies still live in their own folders.
 - PDF extraction works best on text-based PDFs. Scanned/image PDFs may return little or no text.
-- AI-powered features require a valid Anthropic API key in `backend/.env`.
+- AI-powered features require a valid OpenAI API key in `backend/.env`.
 
 ## Verification
 
