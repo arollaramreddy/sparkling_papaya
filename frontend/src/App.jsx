@@ -1,14 +1,372 @@
-import { useState } from "react";
-import { lazy, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
-const API = "http://localhost:3001/api";
+const API = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001/api";
 
-// Lazy-load Remotion player (heavy dependency)
-const StudyVideoPlayer = lazy(() => import("./components/StudyVideo"));
+const DEFAULT_SETTINGS = {
+  previewLength: 2000,   // chars shown in extracted text preview
+  deadlineWindow: 7,     // days: show deadlines within N days in sidebar
+  compactModules: false, // show modules in compact single-column list
+};
+
+const AGENT_TASKS = [
+  {
+    id: "plan",
+    icon: "📅",
+    label: "Build Study Plan",
+    prompt: "Analyze all modules and assignments in this course. Read the key PDFs to understand the content. Create a comprehensive study plan with weekly goals, prioritized by upcoming due dates. Identify the most important topics to study first.",
+  },
+  {
+    id: "notes",
+    icon: "📝",
+    label: "Exam Prep Notes",
+    prompt: "Read through ALL the course materials — every module, every PDF you can find. Create comprehensive exam preparation notes covering all key concepts, definitions, formulas, and likely exam topics. Organize by module.",
+  },
+  {
+    id: "quiz",
+    icon: "❓",
+    label: "Generate Quiz",
+    prompt: "Read the course materials thoroughly. Generate a practice quiz with 12 questions and detailed answers. Cover the most important concepts from each module. Include a mix of conceptual and application questions.",
+  },
+  {
+    id: "explain",
+    icon: "🔍",
+    label: "Key Concepts",
+    prompt: "Explore all course modules and read the materials. Identify and explain the top 15 most important concepts, terms, and ideas from this course. For each one, give a clear definition and why it matters.",
+  },
+];
+
+function LessonSlideView({ lesson, slide }) {
+  const typeBadge = { concept: "Concept", definition: "Definition", example: "Example", summary: "Summary" };
+  const badgeCls = { concept: "", definition: "def", example: "ex", summary: "sum" };
+
+  if (slide.type === "title") return (
+    <div className="lp-slide lp-title-slide">
+      <div className="lp-subject-tag">{lesson.subject}</div>
+      <h1 className="lp-big-heading">{slide.heading}</h1>
+      {slide.subheading && <p className="lp-subheading">{slide.subheading}</p>}
+      <div className="lp-title-meta">{lesson.slides.length} slides · ~{lesson.estimated_minutes} min</div>
+    </div>
+  );
+
+  if (slide.type === "summary") return (
+    <div className="lp-slide lp-summary-slide">
+      <h2 className="lp-slide-heading">{slide.heading || "Key Takeaways"}</h2>
+      <ul className="lp-bullet-list lp-checks">
+        {(slide.bullets || []).map((bullet, index) => (
+          <li key={index}><span className="lp-check-icon">✓</span>{bullet}</li>
+        ))}
+      </ul>
+    </div>
+  );
+
+  if (slide.type === "definition") return (
+    <div className="lp-slide lp-definition-slide">
+      <div className={`lp-type-badge lp-badge-${badgeCls[slide.type] || ""}`}>{typeBadge[slide.type]}</div>
+      <h2 className="lp-term">{slide.term}</h2>
+      <div className="lp-term-divider" />
+      <p className="lp-def-text">{slide.definition}</p>
+      {slide.example && <p className="lp-example-text"><em>Example: </em>{slide.example}</p>}
+    </div>
+  );
+
+  return (
+    <div className="lp-slide lp-concept-slide">
+      {typeBadge[slide.type] && (
+        <div className={`lp-type-badge lp-badge-${badgeCls[slide.type] || ""}`}>{typeBadge[slide.type]}</div>
+      )}
+      <h2 className="lp-slide-heading">{slide.heading}</h2>
+      {slide.bullets && (
+        <ul className="lp-bullet-list">
+          {slide.bullets.map((bullet, index) => (
+            <li key={index}>
+              <span className="lp-dot">{slide.type === "example" ? index + 1 : "●"}</span>{bullet}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const PREFERRED_FEMALE_VOICE_NAMES = [
+  "Samantha",
+  "Ava",
+  "Allison",
+  "Susan",
+  "Victoria",
+  "Karen",
+  "Moira",
+  "Tessa",
+  "Veena",
+  "Google US English",
+  "Google UK English Female",
+  "Microsoft Aria Online (Natural) - English (United States)",
+  "Microsoft Jenny Online (Natural) - English (United States)",
+  "Microsoft Ava Online (Natural) - English (United States)",
+];
+
+function pickPreferredFemaleVoice(voices) {
+  if (!Array.isArray(voices) || !voices.length) return null;
+
+  const englishVoices = voices.filter((voice) => /^en(-|_)/i.test(voice.lang || ""));
+
+  for (const preferredName of PREFERRED_FEMALE_VOICE_NAMES) {
+    const exactMatch = englishVoices.find((voice) => voice.name === preferredName);
+    if (exactMatch) return exactMatch;
+  }
+
+  const keywordMatch = englishVoices.find((voice) =>
+    /(female|woman|aria|jenny|ava|samantha|allison|susan|victoria|karen|moira|tessa|veena)/i.test(
+      `${voice.name} ${voice.voiceURI || ""}`
+    )
+  );
+
+  return keywordMatch || englishVoices[0] || voices[0] || null;
+}
+
+// ── Lesson Player (text-to-video) ─────────────────────────
+function LessonPlayer({ lesson, onClose }) {
+  const [slideIndex, setSlideIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [voiceOn, setVoiceOn] = useState(true);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  const utteranceRef = useRef(null);
+
+  const slide = lesson.slides[slideIndex];
+  const isLast = slideIndex === lesson.slides.length - 1;
+  const isFirst = slideIndex === 0;
+  const progress = ((slideIndex + 1) / lesson.slides.length) * 100;
+
+  useEffect(() => {
+    if (!window.speechSynthesis) return undefined;
+
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      setSelectedVoice(pickPreferredFemaleVoice(voices));
+    };
+
+    loadVoices();
+    window.speechSynthesis.addEventListener?.("voiceschanged", loadVoices);
+
+    return () => {
+      window.speechSynthesis.removeEventListener?.("voiceschanged", loadVoices);
+    };
+  }, []);
+
+  function speakSlide(text, onDone) {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    if (selectedVoice) {
+      u.voice = selectedVoice;
+      u.lang = selectedVoice.lang || "en-US";
+    } else {
+      u.lang = "en-US";
+    }
+    u.rate = 0.92;
+    u.pitch = 1.08;
+    u.onend = onDone || null;
+    utteranceRef.current = u;
+    window.speechSynthesis.speak(u);
+  }
+
+  useEffect(() => {
+    if (!playing) { window.speechSynthesis?.cancel(); return; }
+    if (!voiceOn) return;
+    speakSlide(slide.narration, () => {
+      if (!isLast) setTimeout(() => setSlideIndex((i) => i + 1), 700);
+      else setPlaying(false);
+    });
+    return () => window.speechSynthesis?.cancel();
+  }, [isLast, playing, selectedVoice, slide.narration, voiceOn]);
+
+  useEffect(() => () => window.speechSynthesis?.cancel(), []);
+
+  function goNext() { if (!isLast) { setSlideIndex((i) => i + 1); } }
+  function goPrev() { if (!isFirst) { setSlideIndex((i) => i - 1); } }
+  function togglePlay() {
+    if (playing) { window.speechSynthesis?.cancel(); setPlaying(false); }
+    else { setPlaying(true); }
+  }
+  function handleClose() { window.speechSynthesis?.cancel(); onClose(); }
+
+  return (
+    <div className="lp-overlay" onClick={handleClose}>
+      <div className="lp-player" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="lp-header">
+          <div className="lp-header-left">
+            <span className="lp-header-badge">▶ Video Lesson</span>
+            <span className="lp-header-title">{lesson.title}</span>
+          </div>
+          <div className="lp-header-right">
+            <span className="lp-slide-num">{slideIndex + 1} / {lesson.slides.length}</span>
+            <button className="lp-close-btn" onClick={handleClose}>✕</button>
+          </div>
+        </div>
+
+        {/* Slide Stage */}
+        <div className="lp-stage">
+          <LessonSlideView lesson={lesson} slide={slide} key={slideIndex} />
+        </div>
+
+        {/* Narration strip */}
+        <div className={`lp-narration ${playing ? "visible" : ""}`}>
+          <span className="lp-nar-dot" />
+          <span className="lp-nar-text">{slide.narration}</span>
+        </div>
+
+        {/* Controls */}
+        <div className="lp-controls">
+          <div className="lp-progress-bar">
+            <div className="lp-progress-fill" style={{ width: `${progress}%` }} />
+          </div>
+          <div className="lp-control-row">
+            <div className="lp-ctrl-group">
+              <button className="lp-ctrl-btn" onClick={goPrev} disabled={isFirst}>⏮</button>
+              <button className="lp-ctrl-btn lp-play-btn" onClick={togglePlay}>
+                {playing ? "⏸" : "▶"}
+              </button>
+              <button className="lp-ctrl-btn" onClick={goNext} disabled={isLast}>⏭</button>
+            </div>
+            <span className="lp-time-label">~{lesson.estimated_minutes} min</span>
+            <button
+              className={`lp-ctrl-btn lp-voice-btn ${voiceOn ? "on" : "off"}`}
+              onClick={() => { if (voiceOn) window.speechSynthesis?.cancel(); setVoiceOn((v) => !v); }}
+              title={voiceOn ? "Mute" : "Unmute"}
+            >
+              {voiceOn ? "🔊" : "🔇"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getCurrentPath() {
+  return window.location.pathname || "/";
+}
+
+function getCoursePath(courseId) {
+  return `/course/${courseId}`;
+}
+
+function getCourseIdFromPath(pathname) {
+  const match = pathname.match(/^\/course\/(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function requireNarrationScript(payload, label = "lesson") {
+  const narrationScript = payload?.lesson?.script || payload?.narrationScript || payload?.script || "";
+  if (!narrationScript.trim()) {
+    throw new Error(`${label} is missing narrationScript.`);
+  }
+  return narrationScript;
+}
+
+function convertStoryboardToLesson(storyboard, fallbackTitle, narrationScript) {
+  if (!storyboard?.scenes?.length) return null;
+  const totalSeconds = storyboard.scenes.reduce(
+    (sum, scene) => sum + (scene.durationSeconds || 8),
+    0
+  );
+  return {
+    title: storyboard.title || fallbackTitle || "Lesson Preview",
+    subject: storyboard.mode === "detailed" ? "Detailed lesson" : "Quick lesson",
+    estimated_minutes: Math.max(1, Math.round(totalSeconds / 60)),
+    script: narrationScript,
+    slides: [
+      {
+        id: "title",
+        type: "title",
+        heading: storyboard.title || fallbackTitle || "Lesson Preview",
+        subheading: storyboard.summary || "Scene preview generated from this PDF",
+        narration: storyboard.summary || "Previewing the generated lesson scenes.",
+      },
+      ...storyboard.scenes.map((scene, index) => ({
+        id: scene.id || index + 1,
+        type: index % 3 === 1 ? "definition" : index % 3 === 2 ? "example" : "concept",
+        heading: scene.title,
+        term: scene.title,
+        definition: scene.onScreenText?.[0],
+        example: scene.onScreenText?.[1],
+        bullets: scene.onScreenText || [],
+        narration: scene.narration,
+      })),
+      {
+        id: "summary",
+        type: "summary",
+        heading: "Scene Takeaways",
+        bullets: storyboard.scenes.map((scene) => scene.title).slice(0, 4),
+        narration: storyboard.summary || "These scenes form the final lesson video.",
+      },
+    ],
+  };
+}
+
+// Returns deadline urgency info, or null if > 7 days away
+function deadlineStatus(dateStr) {
+  if (!dateStr) return null;
+  const now = Date.now();
+  const due = new Date(dateStr).getTime();
+  const diff = due - now;
+  const hours = diff / (1000 * 60 * 60);
+  if (diff < 0) return { label: "Overdue", cls: "overdue" };
+  if (hours < 24) return { label: "Due today", cls: "urgent" };
+  if (hours < 72) return { label: `${Math.ceil(hours / 24)}d left`, cls: "soon" };
+  if (hours < 168) return { label: `${Math.ceil(hours / 24)}d left`, cls: "week" };
+  return null;
+}
+
+// Tool icons for the agent panel
+function ToolIcon({ tool }) {
+  if (tool === "list_modules") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+      </svg>
+    );
+  }
+  if (tool === "get_module_files") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <line x1="8" y1="6" x2="21" y2="6" />
+        <line x1="8" y1="12" x2="21" y2="12" />
+        <line x1="8" y1="18" x2="21" y2="18" />
+        <line x1="3" y1="6" x2="3.01" y2="6" />
+        <line x1="3" y1="12" x2="3.01" y2="12" />
+        <line x1="3" y1="18" x2="3.01" y2="18" />
+      </svg>
+    );
+  }
+  if (tool === "extract_pdf") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+        <polyline points="10 9 9 9 8 9" />
+      </svg>
+    );
+  }
+  if (tool === "list_assignments") {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+      </svg>
+    );
+  }
+  return null;
+}
 
 function App() {
-  // Existing state
+  const [pathname, setPathname] = useState(getCurrentPath);
   const [user, setUser] = useState(null);
   const [courses, setCourses] = useState([]);
   const [assignments, setAssignments] = useState([]);
@@ -16,43 +374,218 @@ function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [selectedCourse, setSelectedCourse] = useState(null);
-
-  // New state for modules & AI
   const [modules, setModules] = useState([]);
   const [selectedModule, setSelectedModule] = useState(null);
   const [moduleFiles, setModuleFiles] = useState([]);
   const [loadingModules, setLoadingModules] = useState(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
-  const [summaries, setSummaries] = useState({}); // fileId -> summary
+  const [summaries, setSummaries] = useState({});
   const [moduleSummary, setModuleSummary] = useState(null);
-  const [summarizing, setSummarizing] = useState({}); // fileId -> bool
+  const [summarizing, setSummarizing] = useState({});
   const [summarizingModule, setSummarizingModule] = useState(false);
-  const [extractedTexts, setExtractedTexts] = useState({}); // fileId -> {text, warning}
+  const [extractedTexts, setExtractedTexts] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem("study-assistant-settings");
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
 
-  // ── New state: Enrichment, Video, Study Mode ──────
-  const [webResults, setWebResults] = useState(null);
-  const [searchingWeb, setSearchingWeb] = useState(false);
-  const [enrichedSummary, setEnrichedSummary] = useState(null);
-  const [enriching, setEnriching] = useState(false);
-  const [videoScript, setVideoScript] = useState(null);
-  const [videoData, setVideoData] = useState(null);
-  const [audioUrl, setAudioUrl] = useState(null);
-  const [audioFileName, setAudioFileName] = useState(null);
-  const [generatingScript, setGeneratingScript] = useState(false);
-  const [generatingAudio, setGeneratingAudio] = useState(false);
-  const [generatingVideo, setGeneratingVideo] = useState(false);
-  const [videoUrl, setVideoUrl] = useState(null);
-  const [videoStyle, setVideoStyle] = useState("medium"); // short | medium | long
-  const [activeTab, setActiveTab] = useState("canvas"); // canvas | web | enriched | study | video
+  // Agent state
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentMessages, setAgentMessages] = useState([]);
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentInput, setAgentInput] = useState("");
+  const agentMessagesEndRef = useRef(null);
 
-  // ── Existing handlers ──────────────────────────────
+  // Lesson / video player state
+  const [videoJobs, setVideoJobs] = useState({}); // fileId -> pipeline state
+  const [videoModes, setVideoModes] = useState({}); // fileId -> quick | detailed
+  const [generatingLesson, setGeneratingLesson] = useState({}); // fileId -> bool
+  const [openLesson, setOpenLesson] = useState(null); // scene preview player
 
-  async function handleLogin() {
-    setLoading(true);
-    setError("");
-    setUser(null);
-    setCourses([]);
+  function updateVideoJob(fileId, updater) {
+    setVideoJobs((prev) => {
+      const current = prev[fileId] || {};
+      const next =
+        typeof updater === "function" ? updater(current) : { ...current, ...updater };
+      return { ...prev, [fileId]: next };
+    });
+  }
+
+  function pushVideoStep(fileId, message) {
+    updateVideoJob(fileId, (current) => ({
+      ...current,
+      status: message,
+      steps: [...(current.steps || []), message],
+    }));
+  }
+
+  function getVideoMode(fileId) {
+    return videoModes[fileId] || "quick";
+  }
+
+  async function handleGenerateLesson(file, options = {}) {
+    const fileId = String(file.id);
+    const mode = getVideoMode(fileId);
+    setGeneratingLesson((p) => ({ ...p, [fileId]: true }));
+    updateVideoJob(fileId, {
+      loading: true,
+      error: "",
+      status: "Generating video...",
+      steps: ["Generating video..."],
+      mode,
+      warnings: [],
+    });
+
+    try {
+      pushVideoStep(fileId, "Extracting or reusing PDF text...");
+      let text = "";
+      if (extractedTexts[fileId]?.text) {
+        text = extractedTexts[fileId].text;
+      } else {
+        const res = await fetch(`${API}/file-text?fileId=${fileId}&courseId=${selectedCourse.id}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        text = data.text || "";
+        if (text) {
+          setExtractedTexts((p) => ({
+            ...p,
+            [fileId]: {
+              text,
+              chars: data.chars || text.length,
+              pages: data.pages,
+              warning: data.warning || null,
+            },
+          }));
+        }
+      }
+      if (!text) throw new Error("No extractable text in this PDF");
+
+      pushVideoStep(fileId, "Generating a scene-based lesson script...");
+      const scriptRes = await fetch(`${API}/generate-script`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileId,
+          courseId: selectedCourse.id,
+          title: file.display_name,
+          text,
+          mode,
+          enrichWeb: true,
+        }),
+      });
+      const scriptData = await scriptRes.json();
+      if (scriptData.error) throw new Error(scriptData.error);
+      const narrationScript = requireNarrationScript(scriptData, "Generated script response");
+
+      const previewLesson = convertStoryboardToLesson(
+        scriptData.storyboard,
+        file.display_name,
+        narrationScript
+      );
+      updateVideoJob(fileId, (current) => ({
+        ...current,
+        storyboard: scriptData.storyboard,
+        narrationScript,
+        lesson: { script: narrationScript },
+        scriptUrl: scriptData.scriptUrl,
+        source: scriptData.source,
+        fallbackUsed: scriptData.fallbackUsed,
+        warnings: [scriptData.warning, ...(scriptData.warnings || [])].filter(Boolean),
+        webContext: scriptData.webContext || [],
+        scenePreview:
+          scriptData.storyboard?.scenes?.map((scene) => ({
+            id: scene.id,
+            title: scene.title,
+            keyword: scene.keyword,
+            caption: scene.narration,
+            hasBackgroundVideo: false,
+            hasAudio: false,
+          })) || [],
+        previewLesson,
+      }));
+
+      pushVideoStep(fileId, "Fetching Pexels clips, generating narration, and rendering MP4...");
+      const videoRes = await fetch(`${API}/generate-video`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileId,
+          courseId: selectedCourse.id,
+          title: file.display_name,
+          text,
+          storyboard: scriptData.storyboard,
+          mode,
+          enrichWeb: true,
+          force: options.force || false,
+        }),
+      });
+      const videoData = await videoRes.json();
+      if (videoData.error) throw new Error(videoData.error);
+      const renderedNarrationScript = requireNarrationScript(videoData, "Generated video response");
+
+      updateVideoJob(fileId, (current) => ({
+        ...current,
+        loading: false,
+        status: "Video ready",
+        storyboard: videoData.storyboard,
+        narrationScript: renderedNarrationScript,
+        lesson: { script: renderedNarrationScript },
+        scriptUrl: videoData.scriptUrl || current.scriptUrl,
+        videoUrl: videoData.videoUrl,
+        downloadUrl: videoData.downloadUrl,
+        source: videoData.source || current.source,
+        fallbackUsed: videoData.fallbackUsed || current.fallbackUsed,
+        warnings: videoData.warnings || current.warnings || [],
+        scenePreview: videoData.scenePreview || current.scenePreview || [],
+        previewLesson:
+          convertStoryboardToLesson(videoData.storyboard, file.display_name, renderedNarrationScript) ||
+          current.previewLesson,
+      }));
+    } catch (err) {
+      updateVideoJob(fileId, (current) => ({
+        ...current,
+        loading: false,
+        error: err.message,
+        status: "Video generation failed",
+      }));
+    } finally {
+      setGeneratingLesson((p) => ({ ...p, [fileId]: false }));
+    }
+  }
+
+  function updateSetting(key, value) {
+    setSettings((prev) => {
+      const next = { ...prev, [key]: value };
+      localStorage.setItem("study-assistant-settings", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  const routeCourseId = getCourseIdFromPath(pathname);
+
+  useEffect(() => {
+    function handlePopState() {
+      setPathname(getCurrentPath());
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  const navigate = useCallback((path) => {
+    if (path === getCurrentPath()) return;
+    window.history.pushState({}, "", path);
+    setPathname(path);
+  }, []);
+
+  const resetCourseView = useCallback(() => {
+    setSelectedCourse(null);
     setAssignments([]);
     setFiles([]);
     setModules([]);
@@ -60,33 +593,76 @@ function App() {
     setModuleFiles([]);
     setSummaries({});
     setModuleSummary(null);
+    setSummarizing({});
+    setSummarizingModule(false);
+    setExtractedTexts({});
+    setVideoJobs({});
+    setVideoModes({});
+    setGeneratingLesson({});
+    setOpenLesson(null);
+    setSearchQuery("");
+    setLoadingModules(false);
+    setLoadingFiles(false);
+  }, []);
+
+  async function handleLogin() {
+    setLoading(true);
+    setError("");
+    setUser(null);
+    setCourses([]);
+    resetCourseView();
 
     try {
       const res = await fetch(`${API}/test-login`);
       const data = await res.json();
-
       if (!data.success) {
         setError(data.error || "Login failed");
         setLoading(false);
         return;
       }
-
       setUser(data.user);
-
       const coursesRes = await fetch(`${API}/courses`);
       const coursesData = await coursesRes.json();
-
-      if (Array.isArray(coursesData)) {
-        setCourses(coursesData);
-      }
-    } catch (err) {
+      if (Array.isArray(coursesData)) setCourses(coursesData);
+    } catch {
       setError("Network error - is the backend running on port 3001?");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleCourseSelect(course) {
+  const fetchCourseData = useCallback(async (courseId) => {
+    try {
+      const [assignRes, filesRes] = await Promise.allSettled([
+        fetch(`${API}/courses/${courseId}/assignments`),
+        fetch(`${API}/courses/${courseId}/files`),
+      ]);
+      if (assignRes.status === "fulfilled") {
+        const data = await assignRes.value.json();
+        setAssignments(Array.isArray(data) ? data : []);
+      }
+      if (filesRes.status === "fulfilled") {
+        const data = await filesRes.value.json();
+        setFiles(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      setAssignments([]);
+      setFiles([]);
+    }
+  }, []);
+
+  const fetchModules = useCallback(async (courseId) => {
+    try {
+      const res = await fetch(`${API}/modules?courseId=${courseId}`);
+      const data = await res.json();
+      setModules(Array.isArray(data) ? data : []);
+    } catch {
+      setModules([]);
+    }
+  }, []);
+
+  const handleCourseSelect = useCallback(async (course, options = {}) => {
+    if (!options.skipNavigation) navigate(getCoursePath(course.id));
     setSelectedCourse(course);
     setAssignments([]);
     setFiles([]);
@@ -95,89 +671,55 @@ function App() {
     setModuleFiles([]);
     setSummaries({});
     setModuleSummary(null);
+    setSummarizing({});
+    setSummarizingModule(false);
+    setExtractedTexts({});
+    setVideoJobs({});
+    setVideoModes({});
+    setGeneratingLesson({});
+    setOpenLesson(null);
     setSearchQuery("");
-    setWebResults(null);
-    setEnrichedSummary(null);
-    setVideoScript(null);
-    setVideoData(null);
-    setAudioUrl(null);
-    setAudioFileName(null);
-    setVideoUrl(null);
-    setActiveTab("canvas");
-
-    // Fetch assignments/files and modules in parallel
     setLoading(true);
     setLoadingModules(true);
-
-    const [, modulesResult] = await Promise.allSettled([
-      fetchCourseData(course.id),
-      fetchModules(course.id),
-    ]);
-
+    await Promise.allSettled([fetchCourseData(course.id), fetchModules(course.id)]);
     setLoading(false);
     setLoadingModules(false);
-  }
+  }, [fetchCourseData, fetchModules, navigate]);
 
-  async function fetchCourseData(courseId) {
-    try {
-      const [assignRes, filesRes] = await Promise.allSettled([
-        fetch(`${API}/courses/${courseId}/assignments`),
-        fetch(`${API}/courses/${courseId}/files`),
-      ]);
-
-      if (assignRes.status === "fulfilled") {
-        const data = await assignRes.value.json();
-        setAssignments(Array.isArray(data) ? data : []);
-      }
-
-      if (filesRes.status === "fulfilled") {
-        const data = await filesRes.value.json();
-        setFiles(Array.isArray(data) ? data : []);
-      }
-    } catch {
-      // Non-critical
+  useEffect(() => {
+    if (!courses.length || routeCourseId == null) return;
+    const routeCourse = courses.find((c) => c.id === routeCourseId);
+    if (!routeCourse) return;
+    if (selectedCourse?.id !== routeCourse.id) {
+      handleCourseSelect(routeCourse, { skipNavigation: true });
     }
-  }
+  }, [courses, handleCourseSelect, routeCourseId, selectedCourse?.id]);
 
-  // ── New handlers: Modules & AI ─────────────────────
-
-  async function fetchModules(courseId) {
-    try {
-      const res = await fetch(`${API}/modules?courseId=${courseId}`);
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setModules(data);
-      } else {
-        setModules([]);
-      }
-    } catch {
-      setModules([]);
+  // Auto-scroll agent messages
+  useEffect(() => {
+    if (agentMessagesEndRef.current) {
+      agentMessagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
+  }, [agentMessages]);
+
+  function handleBackToCourses() {
+    resetCourseView();
+    navigate("/");
   }
 
-  async function handleModuleSelect(mod) {
-    setSelectedModule(mod);
+  async function handleModuleSelect(module) {
+    if (!selectedCourse) return;
+    setSelectedModule(module);
     setModuleFiles([]);
     setSummaries({});
     setModuleSummary(null);
-    setWebResults(null);
-    setEnrichedSummary(null);
-    setVideoScript(null);
-    setVideoData(null);
-    setAudioUrl(null);
-    setAudioFileName(null);
-    setVideoUrl(null);
-    setActiveTab("canvas");
     setLoadingFiles(true);
-
     try {
       const res = await fetch(
-        `${API}/module-files?courseId=${selectedCourse.id}&moduleId=${mod.id}`
+        `${API}/module-files?courseId=${selectedCourse.id}&moduleId=${module.id}`
       );
       const data = await res.json();
-      if (Array.isArray(data)) {
-        setModuleFiles(data);
-      }
+      setModuleFiles(Array.isArray(data) ? data : []);
     } catch {
       setModuleFiles([]);
     } finally {
@@ -186,11 +728,8 @@ function App() {
   }
 
   async function handleExtractText(file) {
-    setExtractedTexts((prev) => ({
-      ...prev,
-      [file.id]: { loading: true },
-    }));
-
+    if (!selectedCourse) return;
+    setExtractedTexts((prev) => ({ ...prev, [file.id]: { loading: true } }));
     try {
       const res = await fetch(
         `${API}/file-text?fileId=${file.id}&courseId=${selectedCourse.id}`
@@ -206,7 +745,7 @@ function App() {
           loading: false,
         },
       }));
-    } catch (err) {
+    } catch {
       setExtractedTexts((prev) => ({
         ...prev,
         [file.id]: { error: "Failed to extract text", loading: false },
@@ -215,8 +754,8 @@ function App() {
   }
 
   async function handleSummarizeFile(file) {
+    if (!selectedCourse) return;
     setSummarizing((prev) => ({ ...prev, [file.id]: true }));
-
     try {
       const res = await fetch(`${API}/summarize-file`, {
         method: "POST",
@@ -228,30 +767,21 @@ function App() {
         }),
       });
       const data = await res.json();
-
-      if (data.error) {
-        setSummaries((prev) => ({
-          ...prev,
-          [file.id]: `Error: ${data.error}`,
-        }));
-      } else {
-        setSummaries((prev) => ({ ...prev, [file.id]: data.summary }));
-      }
-    } catch (err) {
       setSummaries((prev) => ({
         ...prev,
-        [file.id]: "Failed to generate summary.",
+        [file.id]: data.error ? `Error: ${data.error}` : data.summary,
       }));
+    } catch {
+      setSummaries((prev) => ({ ...prev, [file.id]: "Failed to generate summary." }));
     } finally {
       setSummarizing((prev) => ({ ...prev, [file.id]: false }));
     }
   }
 
   async function handleSummarizeModule() {
-    if (!selectedModule || !selectedCourse) return;
+    if (!selectedCourse || !selectedModule) return;
     setSummarizingModule(true);
     setModuleSummary(null);
-
     try {
       const res = await fetch(`${API}/summarize-module`, {
         method: "POST",
@@ -263,12 +793,7 @@ function App() {
         }),
       });
       const data = await res.json();
-
-      if (data.error) {
-        setModuleSummary(`Error: ${data.error}`);
-      } else {
-        setModuleSummary(data.summary);
-      }
+      setModuleSummary(data.error ? `Error: ${data.error}` : data.summary);
     } catch {
       setModuleSummary("Failed to generate module summary.");
     } finally {
@@ -278,213 +803,175 @@ function App() {
 
   async function handleSummarizeAllPDFs() {
     const pdfs = moduleFiles.filter((f) => f.is_pdf && f.type === "File");
-    if (pdfs.length === 0) return;
-
     for (const file of pdfs) {
-      if (!summaries[file.id]) {
-        await handleSummarizeFile(file);
-      }
+      if (!summaries[file.id]) await handleSummarizeFile(file);
     }
   }
 
-  // ── New handlers: Enrichment & Video ────────────────
+  // ── Agent functions ──────────────────────────────────────
 
-  async function handleSearchWeb() {
-    if (!selectedModule) return;
-    setSearchingWeb(true);
-    setWebResults(null);
+  async function runAgent(task) {
+    if (!selectedCourse || agentRunning) return;
 
-    try {
-      const topic = selectedModule.name.replace(/^(Module|Week|Unit)\s*\d+[\s:.-]*/i, "").trim() || selectedModule.name;
-      const res = await fetch(`${API}/search-web?topic=${encodeURIComponent(topic)}`);
-      const data = await res.json();
-      setWebResults(data);
-      setActiveTab("web");
-    } catch {
-      setWebResults({ error: "Web search failed. Check your connection." });
-    } finally {
-      setSearchingWeb(false);
-    }
-  }
-
-  async function handleEnrichTopic() {
-    if (!selectedModule) return;
-    setEnriching(true);
-    setEnrichedSummary(null);
-
-    // Auto-search web if not done yet
-    let currentWebResults = webResults?.results;
-    if (!currentWebResults) {
-      try {
-        const topic = selectedModule.name.replace(/^(Module|Week|Unit)\s*\d+[\s:.-]*/i, "").trim() || selectedModule.name;
-        const res = await fetch(`${API}/search-web?topic=${encodeURIComponent(topic)}`);
-        const data = await res.json();
-        setWebResults(data);
-        currentWebResults = data.results;
-      } catch {
-        currentWebResults = [];
-      }
-    }
+    setAgentMessages((prev) => [...prev, { type: "user", text: task }]);
+    setAgentRunning(true);
 
     try {
-      const res = await fetch(`${API}/enrich-topic`, {
+      const response = await fetch(`${API}/agent`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          canvasSummary: moduleSummary || Object.values(summaries).join("\n\n---\n\n"),
-          webResults: currentWebResults || [],
-          topic: selectedModule.name,
-          moduleName: selectedModule.name,
-        }),
+        body: JSON.stringify({ task, courseId: selectedCourse.id }),
       });
-      const data = await res.json();
-      if (data.error) {
-        setEnrichedSummary(`Error: ${data.error}`);
-      } else {
-        setEnrichedSummary(data.enrichedSummary);
-        setActiveTab("enriched");
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: "Request failed" }));
+        setAgentMessages((prev) => [
+          ...prev,
+          { type: "error", message: err.error || "Agent request failed" },
+        ]);
+        setAgentRunning(false);
+        return;
       }
-    } catch {
-      setEnrichedSummary("Enrichment failed. Check your connection.");
-    } finally {
-      setEnriching(false);
-    }
-  }
 
-  async function handleGenerateScript(style) {
-    const content = enrichedSummary || moduleSummary || Object.values(summaries).join("\n\n");
-    if (!content) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-    const scriptStyle = style || videoStyle;
-    setGeneratingScript(true);
-    setVideoScript(null);
-    setVideoData(null);
-    setAudioUrl(null);
-    setAudioFileName(null);
-    setVideoUrl(null);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-    try {
-      const res = await fetch(`${API}/generate-script`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enrichedSummary: content,
-          topic: selectedModule?.name || "Study Material",
-          moduleName: selectedModule?.name,
-          style: scriptStyle,
-        }),
-      });
-      const data = await res.json();
-      if (data.error && !data.script) {
-        setVideoScript({ error: data.error, rawScript: data.rawScript });
-      } else {
-        setVideoScript({ ...data.script, fallback: data.fallback });
-        setActiveTab("video");
-      }
-    } catch {
-      setVideoScript({ error: "Script generation failed." });
-    } finally {
-      setGeneratingScript(false);
-    }
-  }
+        buffer += decoder.decode(value, { stream: true });
 
-  async function handleGenerateAudio() {
-    if (!videoScript || videoScript.error) return;
-    const narration =
-      videoScript.totalNarration ||
-      (videoScript.scenes || []).map((scene) => scene.narration || "").join(" ");
-    if (!narration.trim()) {
-      setAudioUrl(null);
-      return;
-    }
+        // Process complete SSE lines
+        const lines = buffer.split("\n");
+        buffer = lines.pop(); // keep last incomplete line in buffer
 
-    setGeneratingAudio(true);
-    setAudioUrl(null);
-    setAudioFileName(null);
-
-    try {
-      const res = await fetch(`${API}/generate-audio`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: narration,
-          filename: `${selectedModule?.name || "study-video"}-narration`,
-        }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setAudioUrl(null);
-      } else {
-        setAudioUrl(data.audioUrl);
-        setAudioFileName(data.filename || null);
-      }
-    } catch {
-      setAudioUrl(null);
-    } finally {
-      setGeneratingAudio(false);
-    }
-  }
-
-  async function handleGenerateVideo() {
-    if (!videoScript || videoScript.error) return;
-    setGeneratingVideo(true);
-    setVideoData(null);
-    setVideoUrl(null);
-
-    try {
-      const res = await fetch(`${API}/generate-video`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          script: videoScript,
-          topic: selectedModule?.name || "Study Material",
-          audioUrl: audioUrl || null,
-          renderFile: Boolean(audioUrl),
-        }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setVideoData({ error: data.error });
-      } else {
-        setVideoData(data);
-        if (data.videoUrl) {
-          setVideoUrl(data.videoUrl);
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
+          const jsonStr = trimmed.slice(6);
+          try {
+            const event = JSON.parse(jsonStr);
+            if (event.type === "done") {
+              // stream complete
+            } else {
+              setAgentMessages((prev) => [...prev, event]);
+            }
+          } catch {
+            // ignore malformed events
+          }
         }
       }
-    } catch {
-      setVideoData({ error: "Video generation failed." });
+    } catch (err) {
+      setAgentMessages((prev) => [
+        ...prev,
+        { type: "error", message: err.message || "Network error" },
+      ]);
     } finally {
-      setGeneratingVideo(false);
+      setAgentRunning(false);
     }
   }
 
-  function handleDownloadScript() {
-    if (!videoScript) return;
-    const text = videoScript.totalNarration
-      ? `# ${videoScript.title}\n\n## Narration Script\n\n${videoScript.totalNarration}\n\n## Scenes\n\n${videoScript.scenes?.map((s, i) => `### Scene ${i + 1}: ${s.heading || s.term || "Title"}\n${s.narration || ""}`).join("\n\n")}`
-      : JSON.stringify(videoScript, null, 2);
-    const blob = new Blob([text], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${selectedModule?.name || "video"}-script.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function handleAgentInputKeyDown(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const task = agentInput.trim();
+      if (task && !agentRunning) {
+        setAgentInput("");
+        runAgent(task);
+      }
+    }
   }
 
-  function handleDownloadSummary() {
-    const content = enrichedSummary || moduleSummary;
-    if (!content) return;
-    const blob = new Blob([content], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${selectedModule?.name || "summary"}-notes.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function handleAgentSend() {
+    const task = agentInput.trim();
+    if (task && !agentRunning) {
+      setAgentInput("");
+      runAgent(task);
+    }
   }
 
-  // ── Helpers ────────────────────────────────────────
+  function renderAgentMessage(msg, idx) {
+    if (msg.type === "user") {
+      return (
+        <div key={idx} className="agent-msg agent-msg-user">
+          <div className="agent-msg-bubble">{msg.text}</div>
+        </div>
+      );
+    }
+
+    if (msg.type === "thinking") {
+      return (
+        <div key={idx} className="agent-msg agent-msg-thinking">
+          <span className="agent-thinking-dot" />
+          <span className="agent-thinking-dot" />
+          <span className="agent-thinking-dot" />
+          <span className="agent-thinking-label">Thinking... (step {msg.step + 1})</span>
+        </div>
+      );
+    }
+
+    if (msg.type === "tool_call") {
+      return (
+        <div key={idx} className="agent-msg agent-msg-tool">
+          <div className="agent-tool-header">
+            <span className="agent-tool-icon"><ToolIcon tool={msg.tool} /></span>
+            <span className="agent-tool-name">{msg.tool.replace(/_/g, " ")}</span>
+          </div>
+          {msg.input && Object.keys(msg.input).length > 0 && (
+            <div className="agent-tool-input">
+              {Object.entries(msg.input).map(([k, v]) => (
+                <span key={k} className="agent-tool-param">
+                  <span className="agent-tool-param-key">{k}:</span>{" "}
+                  <span className="agent-tool-param-val">{String(v)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (msg.type === "tool_result") {
+      return (
+        <div key={idx} className={`agent-msg agent-msg-result ${msg.success ? "success" : "fail"}`}>
+          <span className="agent-result-icon">{msg.success ? "✓" : "✗"}</span>
+          <span className="agent-result-preview">{msg.preview}</span>
+        </div>
+      );
+    }
+
+    if (msg.type === "answer") {
+      return (
+        <div key={idx} className="agent-msg agent-msg-answer">
+          <div className="agent-answer-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+            Agent Response
+          </div>
+          <div className="summary-content agent-answer-content">
+            {renderMarkdown(msg.text)}
+          </div>
+        </div>
+      );
+    }
+
+    if (msg.type === "error") {
+      return (
+        <div key={idx} className="agent-msg agent-msg-error">
+          <strong>Error:</strong> {msg.message}
+        </div>
+      );
+    }
+
+    return null;
+  }
+
+  // ── Formatting helpers ───────────────────────────────────
 
   function formatDate(dateStr) {
     if (!dateStr) return "No due date";
@@ -497,783 +984,1048 @@ function App() {
     });
   }
 
+  function formatShortDate(dateStr) {
+    if (!dateStr) return "";
+    return new Date(dateStr).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
   function formatSize(bytes) {
     if (!bytes) return "";
     const kb = bytes / 1024;
     return kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`;
   }
 
-  // Simple markdown-ish rendering (bold, bullets, headers)
-  function renderMarkdown(text) {
-    if (!text) return null;
-    return text.split("\n").map((line, i) => {
-      // Headers
-      if (line.startsWith("### "))
-        return (
-          <h4 key={i} className="md-h4">
-            {renderInline(line.slice(4))}
-          </h4>
-        );
-      if (line.startsWith("## "))
-        return (
-          <h3 key={i} className="md-h3">
-            {renderInline(line.slice(3))}
-          </h3>
-        );
-      // Bullets
-      if (line.startsWith("- ") || line.startsWith("* "))
-        return (
-          <li key={i} className="md-li">
-            {renderInline(line.slice(2))}
-          </li>
-        );
-      // Numbered
-      if (/^\d+\.\s/.test(line))
-        return (
-          <li key={i} className="md-li md-ol">
-            {renderInline(line.replace(/^\d+\.\s/, ""))}
-          </li>
-        );
-      // Empty line
-      if (!line.trim()) return <br key={i} />;
-      // Normal paragraph
-      return (
-        <p key={i} className="md-p">
-          {renderInline(line)}
-        </p>
-      );
-    });
-  }
-
   function renderInline(text) {
-    // Bold
     return text.split(/\*\*(.*?)\*\*/g).map((part, i) =>
-      i % 2 === 1 ? (
-        <strong key={i}>{part}</strong>
-      ) : (
-        <span key={i}>{part}</span>
-      )
+      i % 2 === 1 ? <strong key={i}>{part}</strong> : <span key={i}>{part}</span>
     );
   }
 
-  // Search filter for extracted texts
+  function renderMarkdown(text) {
+    if (!text) return null;
+    return text.split("\n").map((line, i) => {
+      if (line.startsWith("### "))
+        return <h4 key={i} className="md-h4">{renderInline(line.slice(4))}</h4>;
+      if (line.startsWith("## "))
+        return <h3 key={i} className="md-h3">{renderInline(line.slice(3))}</h3>;
+      if (line.startsWith("- ") || line.startsWith("* "))
+        return <li key={i} className="md-li">{renderInline(line.slice(2))}</li>;
+      if (/^\d+\.\s/.test(line))
+        return <li key={i} className="md-li md-ol">{renderInline(line.replace(/^\d+\.\s/, ""))}</li>;
+      if (!line.trim()) return <br key={i} />;
+      return <p key={i} className="md-p">{renderInline(line)}</p>;
+    });
+  }
+
+  function renderVideoJobPanel(file) {
+    const job = videoJobs[String(file.id)];
+    if (!job) return null;
+
+    return (
+      <div className="video-panel">
+        <div className="video-panel-header">
+          <div>
+            <h4>Lesson Video</h4>
+            <p className="video-status-line">
+              <span className={`video-status-badge ${job.error ? "error" : job.loading ? "loading" : "ready"}`}>
+                {job.error ? "Failed" : job.loading ? "Generating" : "Ready"}
+              </span>
+              <span>{job.status || "Preparing video lesson"}</span>
+            </p>
+          </div>
+          <div className="video-panel-actions">
+            <span className="video-mode-pill">
+              {job.mode === "detailed" ? "Detailed lesson" : "Quick 2-minute"}
+            </span>
+            {job.previewLesson && (
+              <button
+                className="action-btn sm"
+                onClick={() => setOpenLesson(job.previewLesson)}
+              >
+                Preview Scenes
+              </button>
+            )}
+            <button
+              className="action-btn sm"
+              onClick={() => handleGenerateLesson(file, { force: true })}
+              disabled={job.loading}
+            >
+              {job.error ? "Retry" : "Regenerate"}
+            </button>
+            {job.scriptUrl && (
+              <a className="action-btn sm" href={job.scriptUrl} target="_blank" rel="noreferrer">
+                Download Script
+              </a>
+            )}
+            {job.downloadUrl && (
+              <a className="action-btn sm primary" href={job.downloadUrl} target="_blank" rel="noreferrer">
+                Download Video
+              </a>
+            )}
+          </div>
+        </div>
+
+        {job.fallbackUsed && (
+          <p className="video-note">
+            Claude was unavailable, so this lesson used the free/local fallback path.
+          </p>
+        )}
+
+        {job.steps?.length > 0 && (
+          <div className="video-steps">
+            {job.steps.map((step, index) => (
+              <div key={`${step}-${index}`} className="video-step">
+                <span className="video-step-dot" />
+                <span>{step}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {job.error && <div className="video-error">{job.error}</div>}
+
+        {job.scenePreview?.length > 0 && (
+          <div className="scene-preview-grid">
+            {job.scenePreview.map((scene) => (
+              <div key={scene.id} className="scene-preview-card">
+                <div className="scene-preview-top">
+                  <span className="scene-preview-id">Scene {scene.id}</span>
+                  <span className="scene-preview-keyword">{scene.keyword}</span>
+                </div>
+                <strong>{scene.title}</strong>
+                <p>{scene.caption}</p>
+                <div className="scene-preview-meta">
+                  <span>{scene.hasBackgroundVideo ? "Pexels clip" : "Animated fallback"}</span>
+                  <span>{scene.hasAudio ? "Narrated" : "Captions only"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {job.webContext?.length > 0 && (
+          <div className="web-context-panel">
+            <h5>Public web enrichment</h5>
+            {job.webContext.map((item) => (
+              <p key={item.url}>
+                <strong>{item.title}:</strong> {item.summary}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {job.videoUrl && (
+          <div className="video-player-shell">
+            <video className="generated-video-player" src={job.videoUrl} controls preload="metadata" />
+          </div>
+        )}
+
+        {job.lesson?.script && (
+          <details className="script-preview">
+            <summary>Video script preview</summary>
+            <div className="script-preview-body">
+              <div className="script-scene">
+                <strong>Final narration</strong>
+                <p>{job.lesson.script}</p>
+              </div>
+            </div>
+          </details>
+        )}
+
+        {job.warnings?.length > 0 && (
+          <div className="video-warnings">
+            {job.warnings.map((warning, index) => (
+              <p key={`${warning}-${index}`}>{warning}</p>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const filteredFiles = searchQuery
     ? moduleFiles.filter((f) => {
-        const text = extractedTexts[f.id]?.text || "";
-        const name = f.display_name || "";
         const q = searchQuery.toLowerCase();
         return (
-          name.toLowerCase().includes(q) || text.toLowerCase().includes(q)
+          (f.display_name || "").toLowerCase().includes(q) ||
+          (extractedTexts[f.id]?.text || "").toLowerCase().includes(q)
         );
       })
     : moduleFiles;
 
-  const pdfCount = moduleFiles.filter(
-    (f) => f.is_pdf && f.type === "File"
-  ).length;
+  const pdfCount = moduleFiles.filter((f) => f.is_pdf && f.type === "File").length;
+  const showCourseDetail = routeCourseId != null && selectedCourse;
 
-  // ── Render ─────────────────────────────────────────
+  // Assignments within the user's configured deadline window, sorted soonest first
+  const alertAssignments = assignments
+    .filter((a) => {
+      if (!a.due_at) return false;
+      const diff = new Date(a.due_at).getTime() - Date.now();
+      const hours = diff / (1000 * 60 * 60);
+      return diff < 0 || hours <= settings.deadlineWindow * 24;
+    })
+    .sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
 
-  return (
-    <div className="app">
-      <header>
-        <h1>Canvas Study Assistant</h1>
-        <p className="subtitle">
-          AI-powered study platform — summarize, enrich, and watch
-        </p>
-      </header>
-
-      {/* Login */}
-      <section className="login-section">
-        <button onClick={handleLogin} disabled={loading} className="login-btn">
-          {loading && <span className="spinner" />}
-          {loading ? "Connecting..." : user ? "Refresh" : "Login with Canvas"}
-        </button>
-        {error && <div className="status error">{error}</div>}
-        {user && <div className="status success">Connected as {user.name}</div>}
-      </section>
-
-      {/* User Info */}
-      {user && (
-        <section className="card">
-          <h2>User Info</h2>
-          <div className="user-info">
-            {user.avatar_url && (
-              <img src={user.avatar_url} alt="avatar" className="avatar" />
-            )}
-            <div>
-              <p>
-                <strong>Name:</strong> {user.name}
-              </p>
-              <p>
-                <strong>Email:</strong> {user.email}
-              </p>
-              <p>
-                <strong>ID:</strong> {user.id}
-              </p>
-            </div>
+  // ── Agent Panel ──────────────────────────────────────────
+  const agentPanel = agentOpen && (
+    <>
+      <div className="agent-overlay" onClick={() => setAgentOpen(false)} />
+      <div className="agent-panel">
+        {/* Header */}
+        <div className="agent-header">
+          <div className="agent-header-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFC627" strokeWidth="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+            <span>AI Agent</span>
           </div>
-        </section>
-      )}
-
-      {/* Course Selector */}
-      {courses.length > 0 && (
-        <section className="card">
-          <h2>Select a Course ({courses.length})</h2>
-          <div className="course-dropdown-wrap">
-            <select
-              className="course-dropdown"
-              value={selectedCourse?.id || ""}
-              onChange={(e) => {
-                const course = courses.find(
-                  (c) => c.id === Number(e.target.value)
-                );
-                if (course) handleCourseSelect(course);
-              }}
-            >
-              <option value="">-- Choose a course --</option>
-              {courses.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.code})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Also keep the clickable list */}
-          <ul className="course-list">
-            {courses.map((c) => (
-              <li
-                key={c.id}
-                className={`course-item ${selectedCourse?.id === c.id ? "active" : ""}`}
-                onClick={() => handleCourseSelect(c)}
-              >
-                <strong>{c.name}</strong>
-                <span className="course-code">{c.code}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* ── Modules Section ───────────────────────── */}
-      {selectedCourse && (
-        <section className="card">
-          <h2>
-            Modules - {selectedCourse.name}
-            {modules.length > 0 && ` (${modules.length})`}
-          </h2>
-
-          {loadingModules && <p className="muted">Loading modules...</p>}
-
-          {!loadingModules && modules.length === 0 && (
-            <p className="muted">
-              No modules found for this course (may require permissions).
-            </p>
-          )}
-
-          {modules.length > 0 && (
-            <ul className="module-list">
-              {modules.map((m) => (
-                <li
-                  key={m.id}
-                  className={`module-item ${selectedModule?.id === m.id ? "active" : ""}`}
-                  onClick={() => handleModuleSelect(m)}
-                >
-                  <strong>{m.name}</strong>
-                  <span className="module-meta">
-                    {m.items_count != null && `${m.items_count} items`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
-
-      {/* ── Module Files ──────────────────────────── */}
-      {selectedModule && (
-        <section className="card">
-          <div className="card-header-row">
-            <h2>
-              Files - {selectedModule.name}
-              {moduleFiles.length > 0 && ` (${moduleFiles.length})`}
-            </h2>
-            <div className="card-actions">
-              {pdfCount > 0 && (
-                <>
-                  <button
-                    className="action-btn"
-                    onClick={handleSummarizeModule}
-                    disabled={summarizingModule}
-                  >
-                    {summarizingModule ? (
-                      <>
-                        <span className="spinner-sm" /> Summarizing...
-                      </>
-                    ) : (
-                      "Summarize Module"
-                    )}
-                  </button>
-                  <button
-                    className="action-btn secondary"
-                    onClick={handleSummarizeAllPDFs}
-                  >
-                    Summarize All PDFs
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {loadingFiles && <p className="muted">Loading files...</p>}
-
-          {!loadingFiles && moduleFiles.length === 0 && (
-            <p className="muted">No professor-uploaded files in this module.</p>
-          )}
-
-          {/* Search */}
-          {moduleFiles.length > 0 && (
-            <div className="search-bar">
-              <input
-                type="text"
-                placeholder="Search files and extracted text..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="search-input"
-              />
-              {searchQuery && (
-                <button
-                  className="search-clear"
-                  onClick={() => setSearchQuery("")}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* File List */}
-          {filteredFiles.map((f) => (
-            <div key={f.id} className="file-card">
-              <div className="file-header">
-                <div className="file-info">
-                  <span className={`file-badge ${f.is_pdf ? "pdf" : "other"}`}>
-                    {f.is_pdf ? "PDF" : f.type === "ExternalUrl" ? "Link" : "File"}
-                  </span>
-                  <strong className="file-name">{f.display_name}</strong>
-                  {f.size && (
-                    <span className="file-size">{formatSize(f.size)}</span>
-                  )}
-                </div>
-                {f.is_pdf && f.type === "File" && (
-                  <div className="file-actions">
-                    <button
-                      className="action-btn sm"
-                      onClick={() => handleExtractText(f)}
-                      disabled={extractedTexts[f.id]?.loading}
-                    >
-                      {extractedTexts[f.id]?.loading
-                        ? "Extracting..."
-                        : extractedTexts[f.id]?.text
-                          ? "Re-extract"
-                          : "Extract Text"}
-                    </button>
-                    <button
-                      className="action-btn sm primary"
-                      onClick={() => handleSummarizeFile(f)}
-                      disabled={summarizing[f.id]}
-                    >
-                      {summarizing[f.id]
-                        ? <>
-                            <span className="spinner-sm" /> Summarizing...
-                          </>
-                        : summaries[f.id]
-                          ? "Re-summarize"
-                          : "Summarize"}
-                    </button>
-                  </div>
-                )}
-                {f.type === "ExternalUrl" && f.external_url && (
-                  <a
-                    href={f.external_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="action-btn sm"
-                  >
-                    Open Link
-                  </a>
-                )}
-              </div>
-
-              {/* Extracted text preview */}
-              {extractedTexts[f.id] && !extractedTexts[f.id].loading && (
-                <div className="extract-panel">
-                  {extractedTexts[f.id].warning && (
-                    <p className="warning">{extractedTexts[f.id].warning}</p>
-                  )}
-                  {extractedTexts[f.id].error && (
-                    <p className="warning">{extractedTexts[f.id].error}</p>
-                  )}
-                  {extractedTexts[f.id].text && (
-                    <>
-                      <p className="extract-meta">
-                        {extractedTexts[f.id].chars?.toLocaleString()} chars
-                        {extractedTexts[f.id].pages && `, ~${extractedTexts[f.id].pages} pages`}
-                      </p>
-                      <pre className="extract-text">
-                        {extractedTexts[f.id].text.slice(0, 2000)}
-                        {extractedTexts[f.id].text.length > 2000 && "\n\n... (truncated in preview)"}
-                      </pre>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Summary */}
-              {summaries[f.id] && (
-                <div className="summary-panel">
-                  <h4>AI Summary</h4>
-                  <div className="summary-content">
-                    {renderMarkdown(summaries[f.id])}
-                  </div>
-                </div>
-              )}
-
-              {f.error && <p className="muted">{f.error}</p>}
-            </div>
-          ))}
-        </section>
-      )}
-
-      {/* ── Module Summary ────────────────────────── */}
-      {moduleSummary && (
-        <section className="card summary-card">
-          <h2>Module Summary - {selectedModule?.name}</h2>
-          <div className="summary-content">
-            {renderMarkdown(moduleSummary)}
-          </div>
-        </section>
-      )}
-
-      {/* ── Study Dashboard (Enrichment + Video) ──── */}
-      {selectedModule && (
-        <section className="card study-dashboard">
-          <div className="card-header-row">
-            <h2>Study Dashboard - {selectedModule.name}</h2>
-            <div className="card-actions">
-              {!moduleSummary && Object.keys(summaries).length === 0 && !enrichedSummary && (
-                <span className="muted">Summarize a module or file first to unlock enriched and video features.</span>
-              )}
+          <div className="agent-header-actions">
+            {agentMessages.length > 0 && (
               <button
-                className="action-btn"
-                onClick={handleSearchWeb}
-                disabled={searchingWeb}
+                className="agent-clear-btn"
+                onClick={() => setAgentMessages([])}
+                disabled={agentRunning}
+                title="Clear conversation"
               >
-                {searchingWeb ? (
-                  <><span className="spinner-sm" /> Searching...</>
-                ) : webResults?.results ? "Re-search Web" : "Search Web"}
+                Clear
               </button>
-              <button
-                className="action-btn primary"
-                onClick={handleEnrichTopic}
-                disabled={enriching}
-              >
-                {enriching ? (
-                  <><span className="spinner-sm" /> Enriching...</>
-                ) : enrichedSummary ? "Re-enrich" : "Enrich with Online Knowledge"}
-              </button>
-              {(enrichedSummary || moduleSummary) && (
-                <button className="action-btn secondary" onClick={handleDownloadSummary}>
-                  Download Notes
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Tab navigation */}
-          <div className="tab-nav">
-            <button
-              className={`tab-btn ${activeTab === "canvas" ? "active" : ""}`}
-              onClick={() => setActiveTab("canvas")}
-            >
-              Canvas Summary
-            </button>
-            <button
-              className={`tab-btn ${activeTab === "web" ? "active" : ""}`}
-              onClick={() => setActiveTab("web")}
-              disabled={!webResults}
-            >
-              Web Sources {webResults?.resultCount ? `(${webResults.resultCount})` : ""}
-            </button>
-            <button
-              className={`tab-btn ${activeTab === "enriched" ? "active" : ""}`}
-              onClick={() => setActiveTab("enriched")}
-              disabled={!enrichedSummary}
-            >
-              Enriched Summary
-            </button>
-            <button
-              className={`tab-btn ${activeTab === "study" ? "active" : ""}`}
-              onClick={() => setActiveTab("study")}
-              disabled={!enrichedSummary && !moduleSummary}
-            >
-              Study Mode
-            </button>
-            <button
-              className={`tab-btn ${activeTab === "video" ? "active" : ""}`}
-              onClick={() => setActiveTab("video")}
-            >
-              Video
-            </button>
-          </div>
-
-          {/* Tab content */}
-          <div className="tab-content">
-            {/* Canvas Summary Tab */}
-            {activeTab === "canvas" && (
-              <div className="tab-panel">
-                <div className="source-label canvas-label">Source: Canvas (Professor Material)</div>
-                {moduleSummary ? (
-                  <div className="summary-content">{renderMarkdown(moduleSummary)}</div>
-                ) : Object.keys(summaries).length > 0 ? (
-                  <div className="summary-content">
-                    {Object.entries(summaries).map(([fileId, summary]) => (
-                      <div key={fileId} className="file-summary-block">
-                        <div className="summary-content">{renderMarkdown(summary)}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted">Summarize a module or files first to see Canvas content here.</p>
-                )}
-              </div>
             )}
+            <button
+              className="agent-close-btn"
+              onClick={() => setAgentOpen(false)}
+              title="Close agent panel"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
 
-            {/* Web Sources Tab */}
-            {activeTab === "web" && (
-              <div className="tab-panel">
-                <div className="source-label web-label">Source: Free Public Web</div>
-                {webResults?.error && <p className="warning">{webResults.error}</p>}
-                {webResults?.results?.length === 0 && (
-                  <p className="muted">No web results found for this topic. Try a different module.</p>
-                )}
-                {webResults?.results?.map((r, i) => (
-                  <div key={i} className="web-result">
-                    <div className="web-result-header">
-                      <span className={`source-badge ${r.type}`}>{r.source}</span>
-                      <strong>{r.title}</strong>
-                    </div>
-                    <p className="web-result-text">{r.summary}</p>
-                    {r.url && (
-                      <a href={r.url} target="_blank" rel="noreferrer" className="web-result-link">
-                        View source
-                      </a>
-                    )}
-                  </div>
+        {/* Messages area */}
+        <div className="agent-messages">
+          {!selectedCourse ? (
+            <div className="agent-no-course">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="1.5">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+              </svg>
+              <p>Open a course first to use the AI Agent</p>
+            </div>
+          ) : agentMessages.length === 0 ? (
+            <div className="agent-empty">
+              <p className="agent-empty-label">What would you like to know about <strong>{selectedCourse.name}</strong>?</p>
+              <div className="agent-task-grid">
+                {AGENT_TASKS.map((task) => (
+                  <button
+                    key={task.id}
+                    className="agent-task-btn"
+                    onClick={() => runAgent(task.prompt)}
+                    disabled={agentRunning}
+                  >
+                    <span className="agent-task-icon">{task.icon}</span>
+                    <span className="agent-task-label">{task.label}</span>
+                  </button>
                 ))}
               </div>
-            )}
-
-            {/* Enriched Summary Tab */}
-            {activeTab === "enriched" && (
-              <div className="tab-panel">
-                <div className="source-label enriched-label">Source: Combined (Canvas + Web)</div>
-                {enrichedSummary ? (
-                  <div className="summary-content">{renderMarkdown(enrichedSummary)}</div>
-                ) : (
-                  <p className="muted">Click "Enrich with Online Knowledge" to combine Canvas and web content.</p>
-                )}
-              </div>
-            )}
-
-            {/* Study Mode Tab */}
-            {activeTab === "study" && (
-              <div className="tab-panel study-mode">
-                <div className="study-mode-header">
-                  <h3>Study Mode</h3>
-                  <p className="muted">Material explained like a tutor</p>
+            </div>
+          ) : (
+            <div className="agent-message-list">
+              {agentMessages.map((msg, idx) => renderAgentMessage(msg, idx))}
+              {agentRunning && (
+                <div className="agent-msg agent-msg-thinking">
+                  <span className="agent-thinking-dot" />
+                  <span className="agent-thinking-dot" />
+                  <span className="agent-thinking-dot" />
+                  <span className="agent-thinking-label">Agent working...</span>
                 </div>
-                <div className="summary-content">
-                  {renderMarkdown(enrichedSummary || moduleSummary || "Generate a summary first to use Study Mode.")}
-                </div>
-              </div>
-            )}
+              )}
+              <div ref={agentMessagesEndRef} />
+            </div>
+          )}
+        </div>
 
-            {/* Video Tab */}
-            {activeTab === "video" && (
-              <div className="tab-panel">
-                <div className="video-controls">
-                  <div className="video-style-picker">
-                    <label>Video length:</label>
-                    <select
-                      value={videoStyle}
-                      onChange={(e) => setVideoStyle(e.target.value)}
-                      className="style-select"
-                    >
-                      <option value="short">Quick (1-2 min)</option>
-                      <option value="medium">Standard (2-3 min)</option>
-                      <option value="long">Detailed (4-5 min)</option>
-                    </select>
-                  </div>
-                  <div className="video-actions">
-                    <button
-                      className="action-btn primary"
-                      onClick={() => handleGenerateScript()}
-                      disabled={generatingScript}
-                    >
-                      {generatingScript ? (
-                        <><span className="spinner-sm" style={{borderTopColor: "#fff"}} /> Generating Script...</>
-                      ) : videoScript && !videoScript.error ? "Regenerate Script" : "Generate Video Script"}
-                    </button>
-                    {videoScript && !videoScript.error && (
-                      <>
-                        <button
-                          className="action-btn primary"
-                          onClick={handleGenerateAudio}
-                          disabled={generatingAudio}
-                        >
-                          {generatingAudio ? (
-                            <><span className="spinner-sm" style={{borderTopColor: "#fff"}} /> Generating Narration...</>
-                          ) : audioUrl ? "Regenerate Narration" : "Generate Narration"}
-                        </button>
-                        <button
-                          className="action-btn primary"
-                          onClick={handleGenerateVideo}
-                          disabled={generatingVideo}
-                        >
-                          {generatingVideo ? (
-                            <><span className="spinner-sm" style={{borderTopColor: "#fff"}} /> Building Video...</>
-                          ) : videoUrl ? "Rebuild Video" : "Generate Video"}
-                        </button>
-                        <button className="action-btn secondary" onClick={handleDownloadScript}>
-                          Download Script
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
+        {/* Input */}
+        {selectedCourse && (
+          <div className="agent-input-row">
+            <textarea
+              className="agent-input"
+              placeholder={agentRunning ? "Agent is working..." : "Ask anything about this course..."}
+              value={agentInput}
+              onChange={(e) => setAgentInput(e.target.value)}
+              onKeyDown={handleAgentInputKeyDown}
+              disabled={agentRunning}
+              rows={2}
+            />
+            <button
+              className="agent-send-btn"
+              onClick={handleAgentSend}
+              disabled={agentRunning || !agentInput.trim()}
+            >
+              {agentRunning ? (
+                <span className="spinner" />
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
 
-                {/* Script Preview */}
-                {videoScript && !videoScript.error && (
-                  <div className="script-preview">
-                    <h4>Video Script: {videoScript.title}</h4>
-                    {videoScript.fallback && (
-                      <p className="muted">Using a local fallback script because AI generation was unavailable.</p>
-                    )}
-                    <div className="scene-list">
-                      {videoScript.scenes?.map((scene, i) => (
-                        <div key={i} className={`scene-card scene-${scene.type}`}>
-                          <div className="scene-header">
-                            <span className="scene-number">Scene {i + 1}</span>
-                            <span className="scene-type-badge">{scene.type}</span>
-                            <span className="scene-duration">{scene.durationSeconds}s</span>
-                          </div>
-                          <div className="scene-body">
-                            <strong>{scene.heading || scene.term || "Title Slide"}</strong>
-                            {scene.subtitle && <p className="scene-subtitle">{scene.subtitle}</p>}
-                            {scene.definition && <p className="scene-def">{scene.definition}</p>}
-                            {scene.bullets && (
-                              <ul className="scene-bullets">
-                                {scene.bullets.map((b, j) => <li key={j}>{b}</li>)}
-                              </ul>
-                            )}
-                          </div>
-                          {scene.narration && (
-                            <p className="scene-narration">Narration: {scene.narration}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    {videoScript.totalNarration && (
-                      <div className="full-narration">
-                        <h4>Full Narration Script</h4>
-                        <p>{videoScript.totalNarration}</p>
-                      </div>
-                    )}
-                    {audioUrl && (
-                      <div className="audio-preview">
-                        <h4>Narration Audio</h4>
-                        <audio controls src={audioUrl} style={{ width: "100%" }} />
-                        <div style={{ marginTop: 8 }}>
-                          <a href={audioUrl} target="_blank" rel="noreferrer">Download Audio</a>
-                        </div>
-                      </div>
-                    )}
-                    {videoUrl && (
-                      <div className="video-download">
-                        <h4>Rendered Video</h4>
-                        <a href={videoUrl} target="_blank" rel="noreferrer">Download Generated Video</a>
-                      </div>
-                    )}
-                  </div>
-                )}
+  // ── Sidebar ──────────────────────────────────────────────
+  const sidebar = (
+    <aside className={`sidebar ${sidebarOpen ? "open" : "collapsed"}`}>
+      {/* Brand */}
+      <div className="sidebar-brand">
+        <div className="sidebar-logo">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+          </svg>
+        </div>
+        {sidebarOpen && <span className="sidebar-brand-text">Study Assistant</span>}
+      </div>
 
-                {videoScript?.error && (
-                  <div className="warning">
-                    {videoScript.error}
-                    {videoScript.rawScript && (
-                      <pre className="extract-text" style={{marginTop: 8}}>{videoScript.rawScript}</pre>
-                    )}
-                  </div>
-                )}
+      {/* Nav */}
+      <nav className="sidebar-nav">
+        <button
+          className={`sidebar-nav-item ${!showCourseDetail ? "active" : ""}`}
+          onClick={handleBackToCourses}
+          title="Dashboard"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+          </svg>
+          {sidebarOpen && <span>Dashboard</span>}
+        </button>
 
-                {/* Remotion Video Player */}
-                {videoData && !videoData.error && (
-                  <div className="video-player-section">
-                    <h4>Video Preview</h4>
-                    <Suspense fallback={<p className="muted">Loading video player...</p>}>
-                      <StudyVideoPlayer videoData={{ ...videoData, audioUrl }} />
-                    </Suspense>
-                  </div>
-                )}
+        {/* AI Agent nav item */}
+        <button
+          className={`sidebar-nav-item ${agentOpen ? "active" : ""}`}
+          onClick={() => setAgentOpen(true)}
+          title="AI Agent"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z" />
+            <path d="M2 17l10 5 10-5" />
+            <path d="M2 12l10 5 10-5" />
+          </svg>
+          {sidebarOpen && <span>AI Agent</span>}
+        </button>
 
-                {videoData?.error && <p className="warning">{videoData.error}</p>}
+        <button
+          className="sidebar-nav-item"
+          onClick={() => setShowSettings(true)}
+          title="Settings"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+          {sidebarOpen && <span>Settings</span>}
+        </button>
 
-                {!videoScript && !generatingScript && (
-                  <p className="muted">
-                    Generate a script to create an animated educational video from your study material.
-                    {!enrichedSummary && !moduleSummary && " Summarize or enrich content first."}
-                  </p>
-                )}
-              </div>
+        {user && (
+          <button
+            className="sidebar-nav-item"
+            onClick={handleLogin}
+            disabled={loading}
+            title="Refresh Courses"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+            {sidebarOpen && <span>{loading ? "Loading..." : "Refresh"}</span>}
+          </button>
+        )}
+
+        {showCourseDetail && (
+          <div className="sidebar-course-active">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            </svg>
+            {sidebarOpen && (
+              <span className="sidebar-course-name">{selectedCourse.name}</span>
             )}
           </div>
-        </section>
-      )}
+        )}
+      </nav>
 
-      {/* ── Assignments (existing) ────────────────── */}
-      {selectedCourse && assignments.length > 0 && (
-        <section className="card">
-          <h2>
-            Assignments - {selectedCourse.name} ({assignments.length})
-          </h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Assignment</th>
-                <th>Due Date</th>
-                <th>Points</th>
-              </tr>
-            </thead>
-            <tbody>
-              {assignments.map((a) => (
-                <tr key={a.id}>
-                  <td>
-                    {a.html_url ? (
-                      <a href={a.html_url} target="_blank" rel="noreferrer">
-                        {a.name}
-                      </a>
-                    ) : (
-                      a.name
-                    )}
-                  </td>
-                  <td>{formatDate(a.due_at)}</td>
-                  <td>{a.points_possible ?? "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+      {/* Deadline Tracker */}
+      {sidebarOpen && (
+        <div className="sidebar-deadlines">
+          <div className="sidebar-section-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            Deadlines
+          </div>
 
-      {/* ── Course Files (interactive) ─────────────── */}
-      {selectedCourse && files.length > 0 && (
-        <section className="card">
-          <h2>
-            All Course Files - {selectedCourse.name} ({files.length})
-          </h2>
+          {!selectedCourse && (
+            <p className="sidebar-empty">Open a course to see deadlines</p>
+          )}
 
-          {files.map((f) => {
-            const isPdf = (f.display_name || "").toLowerCase().endsWith(".pdf");
+          {selectedCourse && loading && (
+            <p className="sidebar-empty">Loading...</p>
+          )}
+
+          {selectedCourse && !loading && alertAssignments.length === 0 && assignments.length > 0 && (
+            <p className="sidebar-empty">No deadlines within 7 days</p>
+          )}
+
+          {selectedCourse && !loading && assignments.length === 0 && (
+            <p className="sidebar-empty">No assignments found</p>
+          )}
+
+          {alertAssignments.map((a) => {
+            const status = deadlineStatus(a.due_at);
             return (
-              <div key={f.id} className="file-card">
-                <div className="file-header">
-                  <div className="file-info">
-                    <span className={`file-badge ${isPdf ? "pdf" : "other"}`}>
-                      {isPdf ? "PDF" : "File"}
-                    </span>
-                    <strong className="file-name">{f.display_name}</strong>
-                    {f.size && (
-                      <span className="file-size">{formatSize(f.size)}</span>
-                    )}
-                    <span className="file-date">{formatDate(f.created_at)}</span>
-                  </div>
-                  {isPdf && (
-                    <div className="file-actions">
-                      <button
-                        className="action-btn sm"
-                        onClick={() => handleExtractText({ id: f.id, display_name: f.display_name })}
-                        disabled={extractedTexts[f.id]?.loading}
-                      >
-                        {extractedTexts[f.id]?.loading
-                          ? "Extracting..."
-                          : extractedTexts[f.id]?.text
-                            ? "Re-extract"
-                            : "Extract Text"}
-                      </button>
-                      <button
-                        className="action-btn sm primary"
-                        onClick={() => handleSummarizeFile({ id: f.id, display_name: f.display_name })}
-                        disabled={summarizing[f.id]}
-                      >
-                        {summarizing[f.id]
-                          ? <>
-                              <span className="spinner-sm" /> Summarizing...
-                            </>
-                          : summaries[f.id]
-                            ? "Re-summarize"
-                            : "Summarize"}
-                      </button>
-                    </div>
-                  )}
+              <div key={a.id} className={`deadline-item ${status.cls}`}>
+                <div className="deadline-name">
+                  {a.html_url ? (
+                    <a href={a.html_url} target="_blank" rel="noreferrer">{a.name}</a>
+                  ) : a.name}
                 </div>
-
-                {/* Extracted text preview */}
-                {extractedTexts[f.id] && !extractedTexts[f.id].loading && (
-                  <div className="extract-panel">
-                    {extractedTexts[f.id].warning && (
-                      <p className="warning">{extractedTexts[f.id].warning}</p>
-                    )}
-                    {extractedTexts[f.id].error && (
-                      <p className="warning">{extractedTexts[f.id].error}</p>
-                    )}
-                    {extractedTexts[f.id].text && (
-                      <>
-                        <p className="extract-meta">
-                          {extractedTexts[f.id].chars?.toLocaleString()} chars
-                          {extractedTexts[f.id].pages && `, ~${extractedTexts[f.id].pages} pages`}
-                        </p>
-                        <pre className="extract-text">
-                          {extractedTexts[f.id].text.slice(0, 2000)}
-                          {extractedTexts[f.id].text.length > 2000 && "\n\n... (truncated in preview)"}
-                        </pre>
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {/* Summary */}
-                {summaries[f.id] && (
-                  <div className="summary-panel">
-                    <h4>AI Summary</h4>
-                    <div className="summary-content">
-                      {renderMarkdown(summaries[f.id])}
-                    </div>
-                  </div>
-                )}
+                <div className="deadline-meta">
+                  <span className={`deadline-badge ${status.cls}`}>{status.label}</span>
+                  <span className="deadline-date">{formatShortDate(a.due_at)}</span>
+                </div>
               </div>
             );
           })}
-        </section>
+        </div>
       )}
 
-      <footer>
-        <p>
-          Canvas Study Assistant — Summarize, enrich with web knowledge, and generate study videos.
-          Powered by Claude AI. Free public sources only.
-        </p>
-      </footer>
+      {/* Toggle button */}
+      <button
+        className="sidebar-toggle"
+        onClick={() => setSidebarOpen((v) => !v)}
+        title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          style={{ transform: sidebarOpen ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 0.2s" }}
+        >
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+      </button>
+
+      {/* User profile at bottom */}
+      {user && (
+        <div className="sidebar-user">
+          {user.avatar_url ? (
+            <img src={user.avatar_url} alt="avatar" className="sidebar-avatar" />
+          ) : (
+            <div className="sidebar-avatar-placeholder">
+              {user.name?.[0]?.toUpperCase()}
+            </div>
+          )}
+          {sidebarOpen && (
+            <div className="sidebar-user-info">
+              <div className="sidebar-user-name">{user.name}</div>
+              <div className="sidebar-user-sub">ASU Canvas</div>
+            </div>
+          )}
+        </div>
+      )}
+    </aside>
+  );
+
+  // ── Main Content ─────────────────────────────────────────
+  return (
+    <div className={`app-shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
+      {sidebar}
+
+      <main className="main-content">
+        {/* Top bar */}
+        <div className="topbar">
+          <div className="topbar-left">
+            {showCourseDetail ? (
+              <>
+                <button className="back-link" onClick={handleBackToCourses}>
+                  ← Courses
+                </button>
+                <span className="topbar-sep">/</span>
+                <span className="topbar-course">{selectedCourse.name}</span>
+              </>
+            ) : (
+              <span className="topbar-title">Dashboard</span>
+            )}
+          </div>
+          {error && <div className="status error topbar-error">{error}</div>}
+        </div>
+
+        {/* Login / Connect */}
+        {!user && (
+          <section className="connect-card">
+            <div className="connect-card-inner">
+              <div className="connect-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#FFC627" strokeWidth="1.5">
+                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                </svg>
+              </div>
+              <h2>Connect to Canvas</h2>
+              <p className="muted">Load your courses, modules, and study materials</p>
+              <button onClick={handleLogin} disabled={loading} className="login-btn">
+                {loading && <span className="spinner" />}
+                {loading ? "Connecting..." : "Login with Canvas"}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {user && !showCourseDetail && (
+          <>
+            {/* User greeting */}
+            <div className="user-greeting">
+              <div className="user-greeting-left">
+                {user.avatar_url && (
+                  <img src={user.avatar_url} alt="avatar" className="greeting-avatar" />
+                )}
+                <div>
+                  <h2>Welcome back, {user.name.split(" ")[0]}</h2>
+                  <p className="muted">{courses.length} courses loaded</p>
+                </div>
+              </div>
+              <button onClick={handleLogin} disabled={loading} className="action-btn">
+                {loading && <span className="spinner-sm" />}
+                {loading ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+
+            {/* Course Grid */}
+            {courses.length > 0 && (
+              <section>
+                <div className="section-head">
+                  <h2>My Courses</h2>
+                  <span className="count-pill">{courses.length}</span>
+                </div>
+                <div className="course-grid">
+                  {courses.map((course, idx) => {
+                    const colors = [
+                      "#8C1D40", "#1a5276", "#1e6b45", "#6c3483",
+                      "#b7950b", "#784212", "#1a5276", "#922b21",
+                    ];
+                    const color = colors[idx % colors.length];
+                    const initials = course.name
+                      .split(" ")
+                      .slice(0, 2)
+                      .map((w) => w[0])
+                      .join("")
+                      .toUpperCase();
+                    return (
+                      <button
+                        key={course.id}
+                        type="button"
+                        className="course-card"
+                        onClick={() => handleCourseSelect(course)}
+                      >
+                        <div className="course-card-banner" style={{ background: color }}>
+                          <span className="course-card-initials">{initials}</span>
+                        </div>
+                        <div className="course-card-body">
+                          <div className="course-card-code">{course.code}</div>
+                          <div className="course-card-name">{course.name}</div>
+                        </div>
+                        <div className="course-card-footer">
+                          <span className="course-card-cta" style={{ color }}>Open Course →</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {/* Course Detail */}
+        {showCourseDetail && (
+          <>
+            {loading && <p className="muted loading-msg">Loading course data...</p>}
+
+            {/* Modules */}
+            <section className="card">
+              <div className="section-head">
+                <div>
+                  <p className="section-kicker">Course content</p>
+                  <h2>Modules</h2>
+                </div>
+                {modules.length > 0 && <span className="count-pill">{modules.length}</span>}
+              </div>
+
+              {loadingModules && <p className="muted">Loading modules...</p>}
+              {!loadingModules && modules.length === 0 && (
+                <p className="muted">No modules found for this course.</p>
+              )}
+
+              {modules.length > 0 && (
+                <div className={`module-list ${settings.compactModules ? "compact" : ""}`}>
+                  {modules.map((module) => (
+                    <button
+                      key={module.id}
+                      type="button"
+                      className={`module-item ${selectedModule?.id === module.id ? "active" : ""}`}
+                      onClick={() => handleModuleSelect(module)}
+                    >
+                      <div className="module-item-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M4 6h16M4 10h16M4 14h8" />
+                        </svg>
+                      </div>
+                      <div>
+                        <strong>{module.name}</strong>
+                        <p className="muted">
+                          {module.items_count != null ? `${module.items_count} items` : "Module"}
+                        </p>
+                      </div>
+                      <span className="module-open">View →</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Module Files */}
+            {selectedModule && (
+              <section className="card">
+                <div className="card-header-row">
+                  <div>
+                    <p className="section-kicker">Selected module</p>
+                    <h2>{selectedModule.name}</h2>
+                  </div>
+                  <div className="card-actions">
+                    {pdfCount > 0 && (
+                      <>
+                        <button
+                          className="action-btn primary"
+                          onClick={handleSummarizeModule}
+                          disabled={summarizingModule}
+                        >
+                          {summarizingModule ? (
+                            <><span className="spinner-sm" /> Summarizing...</>
+                          ) : "Summarize Module"}
+                        </button>
+                        <button className="action-btn" onClick={handleSummarizeAllPDFs}>
+                          Summarize All PDFs
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {loadingFiles && <p className="muted">Loading files...</p>}
+                {!loadingFiles && moduleFiles.length === 0 && (
+                  <p className="muted">No professor-uploaded files in this module.</p>
+                )}
+
+                {moduleFiles.length > 0 && (
+                  <div className="search-bar">
+                    <input
+                      type="text"
+                      placeholder="Search files or extracted text..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="search-input"
+                    />
+                    {searchQuery && (
+                      <button className="search-clear" onClick={() => setSearchQuery("")}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {filteredFiles.map((file) => (
+                  <div key={file.id} className="file-card">
+                    <div className="file-header">
+                      <div className="file-info">
+                        <span className={`file-badge ${file.is_pdf ? "pdf" : "other"}`}>
+                          {file.is_pdf ? "PDF" : file.type === "ExternalUrl" ? "Link" : "File"}
+                        </span>
+                        <strong className="file-name">{file.display_name}</strong>
+                        {file.size && <span className="file-size">{formatSize(file.size)}</span>}
+                      </div>
+                      {file.is_pdf && file.type === "File" && (
+                        <div className="file-actions">
+                          <div className="video-mode-toggle">
+                            <button
+                              className={`mode-chip ${getVideoMode(String(file.id)) === "quick" ? "active" : ""}`}
+                              onClick={() =>
+                                setVideoModes((prev) => ({ ...prev, [String(file.id)]: "quick" }))
+                              }
+                              type="button"
+                            >
+                              Quick
+                            </button>
+                            <button
+                              className={`mode-chip ${getVideoMode(String(file.id)) === "detailed" ? "active" : ""}`}
+                              onClick={() =>
+                                setVideoModes((prev) => ({ ...prev, [String(file.id)]: "detailed" }))
+                              }
+                              type="button"
+                            >
+                              Detailed
+                            </button>
+                          </div>
+                          <button
+                            className="action-btn sm"
+                            onClick={() => handleExtractText(file)}
+                            disabled={extractedTexts[file.id]?.loading}
+                          >
+                            {extractedTexts[file.id]?.loading ? "Extracting..."
+                              : extractedTexts[file.id]?.text ? "Re-extract" : "Extract Text"}
+                          </button>
+                          <button
+                            className="action-btn sm primary"
+                            onClick={() => handleSummarizeFile(file)}
+                            disabled={summarizing[file.id]}
+                          >
+                            {summarizing[file.id]
+                              ? <><span className="spinner-sm" /> Summarizing...</>
+                              : summaries[file.id] ? "Re-summarize" : "Summarize"}
+                          </button>
+                          <button
+                            className="action-btn sm video-btn"
+                            onClick={() => handleGenerateLesson(file)}
+                            disabled={generatingLesson[String(file.id)]}
+                            title="Generate video lesson from this PDF"
+                          >
+                            {generatingLesson[String(file.id)]
+                              ? <><span className="spinner-sm" /> Generating video...</>
+                              : videoJobs[String(file.id)]?.error ? "↻ Retry Video"
+                              : videoJobs[String(file.id)]?.videoUrl ? "↻ Regenerate Video"
+                              : "▶ Video Lesson"}
+                          </button>
+                        </div>
+                      )}
+                      {file.type === "ExternalUrl" && file.external_url && (
+                        <a href={file.external_url} target="_blank" rel="noreferrer" className="action-btn sm">
+                          Open Link
+                        </a>
+                      )}
+                    </div>
+
+                    {extractedTexts[file.id] && !extractedTexts[file.id].loading && (
+                      <div className="extract-panel">
+                        {extractedTexts[file.id].warning && (
+                          <p className="warning">{extractedTexts[file.id].warning}</p>
+                        )}
+                        {extractedTexts[file.id].error && (
+                          <p className="warning">{extractedTexts[file.id].error}</p>
+                        )}
+                        {extractedTexts[file.id].text && (
+                          <>
+                            <p className="extract-meta">
+                              {extractedTexts[file.id].chars?.toLocaleString()} chars
+                              {extractedTexts[file.id].pages && `, ~${extractedTexts[file.id].pages} pages`}
+                            </p>
+                            <pre className="extract-text">
+                              {extractedTexts[file.id].text.slice(0, settings.previewLength)}
+                              {extractedTexts[file.id].text.length > settings.previewLength && "\n\n... (truncated in preview)"}
+                            </pre>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {summaries[file.id] && (
+                      <div className="summary-panel">
+                        <h4>AI Summary</h4>
+                        <div className="summary-content">{renderMarkdown(summaries[file.id])}</div>
+                      </div>
+                    )}
+                    {renderVideoJobPanel(file)}
+                    {file.error && <p className="muted">{file.error}</p>}
+                  </div>
+                ))}
+              </section>
+            )}
+
+            {moduleSummary && (
+              <section className="card summary-card">
+                <h2>Module Summary — {selectedModule?.name}</h2>
+                <div className="summary-content">{renderMarkdown(moduleSummary)}</div>
+              </section>
+            )}
+
+            {/* Assignments table */}
+            {assignments.length > 0 && (
+              <section className="card">
+                <div className="section-head">
+                  <div>
+                    <p className="section-kicker">Assignments</p>
+                    <h2>Upcoming work</h2>
+                  </div>
+                  <span className="count-pill">{assignments.length}</span>
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Assignment</th>
+                      <th>Due Date</th>
+                      <th>Points</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignments.map((a) => {
+                      const status = deadlineStatus(a.due_at);
+                      return (
+                        <tr key={a.id} className={status ? `row-${status.cls}` : ""}>
+                          <td>
+                            {a.html_url ? (
+                              <a href={a.html_url} target="_blank" rel="noreferrer">{a.name}</a>
+                            ) : a.name}
+                          </td>
+                          <td>
+                            {formatDate(a.due_at)}
+                            {status && (
+                              <span className={`deadline-badge ${status.cls}`} style={{ marginLeft: "0.5rem" }}>
+                                {status.label}
+                              </span>
+                            )}
+                          </td>
+                          <td>{a.points_possible ?? "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </section>
+            )}
+
+            {/* All files */}
+            {files.length > 0 && (
+              <section className="card">
+                <div className="section-head">
+                  <div>
+                    <p className="section-kicker">Course files</p>
+                    <h2>All uploaded materials</h2>
+                  </div>
+                  <span className="count-pill">{files.length}</span>
+                </div>
+                {files.map((file) => {
+                  const isPdf = (file.display_name || "").toLowerCase().endsWith(".pdf");
+                  return (
+                    <div key={file.id} className="file-card">
+                      <div className="file-header">
+                        <div className="file-info">
+                          <span className={`file-badge ${isPdf ? "pdf" : "other"}`}>
+                            {isPdf ? "PDF" : "File"}
+                          </span>
+                          <strong className="file-name">{file.display_name}</strong>
+                          {file.size && <span className="file-size">{formatSize(file.size)}</span>}
+                          <span className="file-date">{formatDate(file.created_at)}</span>
+                        </div>
+                        {isPdf && (
+                          <div className="file-actions">
+                            <div className="video-mode-toggle">
+                              <button
+                                className={`mode-chip ${getVideoMode(String(file.id)) === "quick" ? "active" : ""}`}
+                                onClick={() =>
+                                  setVideoModes((prev) => ({ ...prev, [String(file.id)]: "quick" }))
+                                }
+                                type="button"
+                              >
+                                Quick
+                              </button>
+                              <button
+                                className={`mode-chip ${getVideoMode(String(file.id)) === "detailed" ? "active" : ""}`}
+                                onClick={() =>
+                                  setVideoModes((prev) => ({ ...prev, [String(file.id)]: "detailed" }))
+                                }
+                                type="button"
+                              >
+                                Detailed
+                              </button>
+                            </div>
+                            <button
+                              className="action-btn sm"
+                              onClick={() => handleExtractText({ id: file.id, display_name: file.display_name })}
+                              disabled={extractedTexts[file.id]?.loading}
+                            >
+                              {extractedTexts[file.id]?.loading ? "Extracting..."
+                                : extractedTexts[file.id]?.text ? "Re-extract" : "Extract Text"}
+                            </button>
+                            <button
+                              className="action-btn sm primary"
+                              onClick={() => handleSummarizeFile({ id: file.id, display_name: file.display_name })}
+                              disabled={summarizing[file.id]}
+                            >
+                              {summarizing[file.id]
+                                ? <><span className="spinner-sm" /> Summarizing...</>
+                                : summaries[file.id] ? "Re-summarize" : "Summarize"}
+                            </button>
+                            <button
+                              className="action-btn sm video-btn"
+                              onClick={() => handleGenerateLesson({ id: file.id, display_name: file.display_name })}
+                              disabled={generatingLesson[String(file.id)]}
+                              title="Generate video lesson from this PDF"
+                            >
+                              {generatingLesson[String(file.id)]
+                                ? <><span className="spinner-sm" /> Generating video...</>
+                                : videoJobs[String(file.id)]?.error ? "↻ Retry Video"
+                                : videoJobs[String(file.id)]?.videoUrl ? "↻ Regenerate Video"
+                                : "▶ Video Lesson"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {extractedTexts[file.id] && !extractedTexts[file.id].loading && (
+                        <div className="extract-panel">
+                          {extractedTexts[file.id].warning && (
+                            <p className="warning">{extractedTexts[file.id].warning}</p>
+                          )}
+                          {extractedTexts[file.id].error && (
+                            <p className="warning">{extractedTexts[file.id].error}</p>
+                          )}
+                          {extractedTexts[file.id].text && (
+                            <>
+                              <p className="extract-meta">
+                                {extractedTexts[file.id].chars?.toLocaleString()} chars
+                                {extractedTexts[file.id].pages && `, ~${extractedTexts[file.id].pages} pages`}
+                              </p>
+                              <pre className="extract-text">
+                                {extractedTexts[file.id].text.slice(0, 2000)}
+                                {extractedTexts[file.id].text.length > 2000 && "\n\n... (truncated in preview)"}
+                              </pre>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {summaries[file.id] && (
+                        <div className="summary-panel">
+                          <h4>AI Summary</h4>
+                          <div className="summary-content">{renderMarkdown(summaries[file.id])}</div>
+                        </div>
+                      )}
+                      {renderVideoJobPanel({ id: file.id, display_name: file.display_name })}
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+          </>
+        )}
+
+        <footer>
+          <p>Canvas Study Assistant · Canvas PDFs, AI summaries, and free-fallback lesson videos · Arizona State University</p>
+        </footer>
+      </main>
+
+      {/* ── Video Lesson Player ────────────────────────────── */}
+      {openLesson && <LessonPlayer lesson={openLesson} onClose={() => setOpenLesson(null)} />}
+
+      {/* ── Agent Panel ────────────────────────────────────── */}
+      {agentPanel}
+
+      {/* ── Settings Modal ─────────────────────────────────── */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Preferences</h2>
+              <button className="modal-close" onClick={() => setShowSettings(false)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {/* Preview Length */}
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Text Preview Length</span>
+                  <span className="setting-desc">Characters shown in extracted PDF preview</span>
+                </div>
+                <select
+                  className="setting-select"
+                  value={settings.previewLength}
+                  onChange={(e) => updateSetting("previewLength", Number(e.target.value))}
+                >
+                  <option value={500}>500 chars (short)</option>
+                  <option value={2000}>2,000 chars (default)</option>
+                  <option value={5000}>5,000 chars (long)</option>
+                  <option value={10000}>10,000 chars (full)</option>
+                </select>
+              </div>
+
+              {/* Deadline Window */}
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Deadline Alert Window</span>
+                  <span className="setting-desc">Show upcoming deadlines in sidebar within</span>
+                </div>
+                <select
+                  className="setting-select"
+                  value={settings.deadlineWindow}
+                  onChange={(e) => updateSetting("deadlineWindow", Number(e.target.value))}
+                >
+                  <option value={1}>1 day</option>
+                  <option value={3}>3 days</option>
+                  <option value={7}>7 days (default)</option>
+                  <option value={14}>14 days</option>
+                  <option value={30}>30 days</option>
+                </select>
+              </div>
+
+              {/* Compact modules */}
+              <div className="setting-row">
+                <div className="setting-label">
+                  <span className="setting-name">Compact Module List</span>
+                  <span className="setting-desc">Show modules with less spacing</span>
+                </div>
+                <button
+                  className={`setting-toggle ${settings.compactModules ? "on" : "off"}`}
+                  onClick={() => updateSetting("compactModules", !settings.compactModules)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button
+                className="action-btn"
+                onClick={() => {
+                  setSettings(DEFAULT_SETTINGS);
+                  localStorage.setItem("study-assistant-settings", JSON.stringify(DEFAULT_SETTINGS));
+                }}
+              >
+                Reset to defaults
+              </button>
+              <button className="action-btn primary" onClick={() => setShowSettings(false)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
