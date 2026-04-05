@@ -28,19 +28,55 @@ const AGENT_PACK_OPTIONS = [
   { id: "study_plan", label: "Study planner" },
 ];
 
+const STUDY_PLAN_CONFIG = {
+  id: "study-plan",
+  label: "Study Plan",
+  defaults: {
+    hoursPerWeek: 8,
+    sessionMinutes: 60,
+    pace: "balanced",
+    includeAssignments: true,
+    focusDays: ["Mon", "Tue", "Wed", "Thu", "Fri"],
+  },
+};
+
+const DAY_NAMES = [
+  { short: "Mon", full: "Monday" },
+  { short: "Tue", full: "Tuesday" },
+  { short: "Wed", full: "Wednesday" },
+  { short: "Thu", full: "Thursday" },
+  { short: "Fri", full: "Friday" },
+  { short: "Sat", full: "Saturday" },
+  { short: "Sun", full: "Sunday" },
+];
+
+const DEFAULT_DAILY_MINUTES = Math.round(
+  (STUDY_PLAN_CONFIG.defaults.hoursPerWeek * 60) /
+    STUDY_PLAN_CONFIG.defaults.focusDays.length
+);
+
 const DEFAULT_STUDY_PLAN_PREFERENCES = {
-  availableDailyMinutes: 60,
-  sessionLength: 30,
+  availableDailyMinutes: DEFAULT_DAILY_MINUTES,
+  hoursPerWeek: STUDY_PLAN_CONFIG.defaults.hoursPerWeek,
+  sessionLength: STUDY_PLAN_CONFIG.defaults.sessionMinutes,
   horizonDays: 7,
-  pace: "balanced",
+  pace: STUDY_PLAN_CONFIG.defaults.pace,
   preferredTimeOfDay: "evening",
   includeBreaks: true,
   weekendStudy: true,
+  includeAssignments: STUDY_PLAN_CONFIG.defaults.includeAssignments,
+  focusDays: [...STUDY_PLAN_CONFIG.defaults.focusDays],
 };
 
-function formatMinutes(minutes) {
-  if (!minutes) return "0 min";
-  return `${minutes} min`;
+function getToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(dateInput, days) {
+  const date = new Date(`${dateInput}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return dateInput;
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function formatDate(dateStr) {
@@ -51,6 +87,16 @@ function formatDate(dateStr) {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+  });
+}
+
+function formatShortDate(dateValue) {
+  if (!dateValue) return "";
+  const date = new Date(`${dateValue}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
   });
 }
 
@@ -152,6 +198,109 @@ function normalizeQuizQuestion(question = {}) {
     correctOption,
     answer: question.answer || "",
     difficulty: question.difficulty || "",
+  };
+}
+
+function formatStudyPace(value) {
+  const labels = {
+    light: "Light pace",
+    balanced: "Balanced pace",
+    intensive: "Intensive pace",
+  };
+  return labels[value] || "Balanced pace";
+}
+
+function formatStudyWindow(value) {
+  const labels = {
+    morning: "Best in the morning",
+    afternoon: "Best in the afternoon",
+    evening: "Best in the evening",
+    late_night: "Best late at night",
+  };
+  return labels[value] || "Flexible time";
+}
+
+function formatSessionLabel(minutes) {
+  const total = Number(minutes) || 60;
+  const hours = Math.floor(total / 60);
+  const remainder = total % 60;
+  if (hours > 0 && remainder > 0) return `${hours}h ${remainder}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${remainder}m`;
+}
+
+function buildStudyTimeline(sessions = [], preferences = {}) {
+  const startDate = getToday();
+  const sessionLength = Math.max(Number(preferences.sessionLength) || 30, 15);
+  const dailyMinutes = Math.max(Number(preferences.availableDailyMinutes) || 60, sessionLength);
+  const sessionsPerDay = Math.max(1, Math.floor(dailyMinutes / sessionLength));
+
+  return sessions.map((session, index) => {
+    const dayOffset = Math.floor(index / sessionsPerDay);
+    const date = addDays(startDate, dayOffset);
+    return {
+      ...session,
+      scheduleDate: date,
+      scheduleLabel: `Day ${dayOffset + 1}`,
+    };
+  });
+}
+
+function buildStudyPlannerViewModel(sessions = [], preferences = {}, overview = "") {
+  const sessionLength = Math.max(Number(preferences.sessionLength) || 60, 15);
+  const focusDays = Array.isArray(preferences.focusDays) && preferences.focusDays.length
+    ? preferences.focusDays
+    : [...STUDY_PLAN_CONFIG.defaults.focusDays];
+  const timeline = buildStudyTimeline(sessions, preferences);
+  const sessionsPerWeek = Math.max(1, focusDays.length);
+  const dailySchedule = [];
+
+  timeline.forEach((session, index) => {
+    const weekIndex = Math.floor(index / sessionsPerWeek);
+    const dayInWeek = index % sessionsPerWeek;
+    const dayMeta = DAY_NAMES.find((day) => day.short === focusDays[dayInWeek]) || DAY_NAMES[dayInWeek] || DAY_NAMES[0];
+    const date = addDays(getToday(), index);
+
+    if (!dailySchedule[weekIndex]) {
+      dailySchedule[weekIndex] = {
+        weekLabel: `Week ${weekIndex + 1}`,
+        focus: "",
+        days: [],
+      };
+    }
+
+    dailySchedule[weekIndex].days.push({
+      dayKey: dayMeta.short,
+      label: dayMeta.full,
+      date,
+      schedule: `${formatSessionLabel(session.duration_minutes || sessionLength)} study block`,
+      tasks: [session.goal || session.title],
+    });
+  });
+
+  const weeklyPlan = dailySchedule.map((week, index) => ({
+    day: week.weekLabel,
+    focus:
+      week.days
+        .map((day) => day.tasks?.[0] || "")
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(" • ") || `Focus on the key ideas from week ${index + 1}.`,
+  }));
+
+  const milestones = timeline.slice(0, 4).map((session, index) => ({
+    title: session.title,
+    reason: session.goal,
+    dueDate: session.scheduleDate || addDays(getToday(), index),
+  }));
+
+  return {
+    overview:
+      overview ||
+      "A study plan generated from the selected module materials and your planning preferences.",
+    weeklyPlan,
+    milestones,
+    dailySchedule,
   };
 }
 
@@ -451,6 +600,7 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
   const [moduleWorkflowLoading, setModuleWorkflowLoading] = useState(false);
   const [moduleWorkflowError, setModuleWorkflowError] = useState("");
   const [quizSelections, setQuizSelections] = useState({});
+  const [flashcardFlips, setFlashcardFlips] = useState({});
   const [studyPlanPreferences, setStudyPlanPreferences] = useState(DEFAULT_STUDY_PLAN_PREFERENCES);
   const [extractedTexts, setExtractedTexts] = useState({});
   const [searchQuery, setSearchQuery] = useState("");
@@ -498,6 +648,7 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     setModuleWorkflowLoading(false);
     setModuleWorkflowError("");
     setQuizSelections({});
+    setFlashcardFlips({});
     setStudyPlanPreferences(DEFAULT_STUDY_PLAN_PREFERENCES);
     setExtractedTexts({});
     setSearchQuery("");
@@ -582,6 +733,26 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
 
   const pdfCount = moduleFiles.filter((file) => file.is_pdf && file.type === "File").length;
   const selectedWorkflow = moduleWorkflowResults[moduleWorkflowTarget] || null;
+  const selectedQuizQuestions = selectedWorkflow?.workflow?.assets?.quiz_questions || [];
+  const selectedFlashcards = selectedWorkflow?.workflow?.assets?.flashcards || [];
+  const selectedStudySessions = selectedWorkflow?.workflow?.assets?.study_plan?.sessions || [];
+  const answeredQuizCount = selectedQuizQuestions.reduce(
+    (count, _question, index) => count + (quizSelections[`${moduleWorkflowTarget}-${index}`] ? 1 : 0),
+    0
+  );
+  const correctQuizCount = selectedQuizQuestions.reduce((count, rawQuestion, index) => {
+    const question = normalizeQuizQuestion(rawQuestion);
+    return count + (quizSelections[`${moduleWorkflowTarget}-${index}`] === question.correctOption ? 1 : 0);
+  }, 0);
+  const flippedFlashcardCount = selectedFlashcards.reduce(
+    (count, _card, index) => count + (flashcardFlips[`flashcard-${index}`] ? 1 : 0),
+    0
+  );
+  const studyPlanView = buildStudyPlannerViewModel(
+    selectedStudySessions,
+    studyPlanPreferences,
+    selectedWorkflow?.workflow?.overview || ""
+  );
 
   async function handleCourseSelect(course) {
     resetCourseState();
@@ -613,6 +784,7 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     setModuleWorkflowTarget("quizzes");
     setModuleWorkflowError("");
     setQuizSelections({});
+    setFlashcardFlips({});
     setStudyPlanPreferences(DEFAULT_STUDY_PLAN_PREFERENCES);
     setLoadingFiles(true);
 
@@ -771,11 +943,44 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
     }));
   }
 
+  function toggleFlashcard(cardKey) {
+    setFlashcardFlips((current) => ({
+      ...current,
+      [cardKey]: !current[cardKey],
+    }));
+  }
+
+  function setAllFlashcards(cards = [], flipped = false) {
+    setFlashcardFlips(
+      cards.reduce((next, _card, index) => {
+        next[`flashcard-${index}`] = flipped;
+        return next;
+      }, {})
+    );
+  }
+
+  function resetQuizSelections() {
+    setQuizSelections({});
+  }
+
   function updateStudyPlanPreference(key, value) {
     setStudyPlanPreferences((current) => ({
       ...current,
       [key]: value,
     }));
+  }
+
+  function toggleStudyPlanDay(dayKey) {
+    setStudyPlanPreferences((current) => {
+      const nextFocusDays = current.focusDays.includes(dayKey)
+        ? current.focusDays.filter((day) => day !== dayKey)
+        : [...current.focusDays, dayKey];
+
+      return {
+        ...current,
+        focusDays: nextFocusDays.length ? nextFocusDays : current.focusDays,
+      };
+    });
   }
 
   function updateLessonJob(fileId, updater) {
@@ -1454,6 +1659,24 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
                       </select>
                     </label>
 
+                    <div className="manual-study-field manual-study-days-field">
+                      <span>Study days</span>
+                      <div className="manual-study-day-chips">
+                        {DAY_NAMES.map((day) => (
+                          <button
+                            key={day.short}
+                            type="button"
+                            className={`manual-study-day-chip ${
+                              studyPlanPreferences.focusDays.includes(day.short) ? "active" : ""
+                            }`}
+                            onClick={() => toggleStudyPlanDay(day.short)}
+                          >
+                            {day.full}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <label className="manual-study-check">
                       <input
                         type="checkbox"
@@ -1516,16 +1739,110 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
 
                   {moduleWorkflowTarget === "study_plan" ? (
                     <div className="manual-summary-panel">
-                      <h4>Study Planner</h4>
-                      {(selectedWorkflow.workflow?.assets?.study_plan?.sessions || []).length ? (
-                        <div className="manual-agent-list">
-                          {selectedWorkflow.workflow.assets.study_plan.sessions.map((session, index) => (
-                            <div key={`${session.title}-${index}`} className="manual-agent-item">
-                              <strong>{session.title}</strong>
-                              <span>{formatMinutes(session.duration_minutes)} · {session.goal}</span>
-                            </div>
-                          ))}
+                      <div className="manual-output-head">
+                        <div>
+                          <h4>Study Planner</h4>
+                          <p className="manual-muted">
+                            A paced schedule generated from your selected module materials.
+                          </p>
                         </div>
+                      </div>
+                      {selectedStudySessions.length ? (
+                        <>
+                          <section className="feature-card feature-output-card feature-detail-shell manual-feature-shell">
+                            <div className="feature-output-hero">
+                              <div>
+                                <span className="panel-badge feature-panel-badge">Generated plan</span>
+                                <h3>{selectedModule?.name || "Module study plan"}</h3>
+                                <p>{studyPlanView.overview}</p>
+                              </div>
+                              <div className="feature-output-meta">
+                                <span>{studyPlanPreferences.horizonDays} day horizon</span>
+                                <span>{studyPlanPreferences.hoursPerWeek} hrs/week</span>
+                                <span>{selectedStudySessions.length} sessions</span>
+                              </div>
+                            </div>
+
+                            <div className="feature-output-grid">
+                              <div className="feature-result-block">
+                                <h4>Weekly Focus</h4>
+                                {(studyPlanView.weeklyPlan || []).map((week, index) => (
+                                  <div key={`${week.day}-${index}`} className="feature-result-item">
+                                    <strong>{week.day}</strong>
+                                    <p>{week.focus}</p>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="feature-result-block">
+                                <h4>Milestones</h4>
+                                {(studyPlanView.milestones || []).map((milestone, index) => (
+                                  <div key={`${milestone.title}-${index}`} className="feature-result-item">
+                                    <strong>{milestone.title}</strong>
+                                    <p>{milestone.reason}</p>
+                                    <span>{formatDate(milestone.dueDate)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="feature-card feature-day-planner manual-feature-day-planner">
+                              <div className="feature-library-head">
+                                <div>
+                                  <h3>Daily Study Schedule</h3>
+                                  <p className="feature-subcopy">
+                                    Built from your module materials, available hours, and selected study days.
+                                  </p>
+                                </div>
+                                <div className="feature-output-meta">
+                                  <span>{formatStudyPace(studyPlanPreferences.pace)}</span>
+                                  <span>{formatStudyWindow(studyPlanPreferences.preferredTimeOfDay)}</span>
+                                </div>
+                              </div>
+
+                              <div className="feature-week-stack">
+                                {(studyPlanView.dailySchedule || []).map((week, weekIndex) => (
+                                  <section key={`${week.weekLabel}-${weekIndex}`} className="feature-week-card">
+                                    <div className="feature-week-header">
+                                      <div>
+                                        <h4>{week.weekLabel}</h4>
+                                        <p>{week.focus}</p>
+                                      </div>
+                                    </div>
+                                    <div className="feature-day-grid">
+                                      {(week.days || []).map((day, dayIndex) => (
+                                        <div
+                                          key={`${day.dayKey}-${dayIndex}`}
+                                          className={`feature-day-card ${
+                                            studyPlanPreferences.focusDays.includes(day.dayKey) ? "active" : ""
+                                          }`}
+                                        >
+                                          <div className="feature-day-header">
+                                            <div>
+                                              <strong>{day.label}</strong>
+                                              <span>{formatShortDate(day.date)}</span>
+                                            </div>
+                                            <small>{day.schedule}</small>
+                                          </div>
+                                          <div className="feature-task-list">
+                                            {(day.tasks || []).map((task, taskIndex) => (
+                                              <div key={`${day.dayKey}-task-${taskIndex}`} className="feature-result-item">
+                                                <strong>{task}</strong>
+                                              </div>
+                                            ))}
+                                            {(!day.tasks || day.tasks.length === 0) ? (
+                                              <p className="feature-muted">Open slot</p>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </section>
+                                ))}
+                              </div>
+                            </div>
+                          </section>
+                        </>
                       ) : (
                         <p className="manual-empty">No study planner output yet.</p>
                       )}
@@ -1534,10 +1851,40 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
 
                   {moduleWorkflowTarget === "quizzes" ? (
                     <div className="manual-summary-panel">
-                      <h4>Quiz</h4>
-                      {(selectedWorkflow.workflow?.assets?.quiz_questions || []).length ? (
+                      <div className="manual-output-head">
+                        <div>
+                          <h4>Quiz</h4>
+                          <p className="manual-muted">
+                            Practice questions generated from the selected module PDFs.
+                          </p>
+                        </div>
+                        <div className="manual-card-actions">
+                          <button type="button" className="manual-btn" onClick={resetQuizSelections}>
+                            Reset answers
+                          </button>
+                        </div>
+                      </div>
+                      {selectedQuizQuestions.length ? (
                         <div className="manual-quiz-list">
-                          {selectedWorkflow.workflow.assets.quiz_questions.map((rawQuestion, index) => {
+                          <div className="manual-quiz-header">
+                            <div className="manual-quiz-header-metric">
+                              <strong>{selectedQuizQuestions.length}</strong>
+                              <span>Questions</span>
+                            </div>
+                            <div className="manual-quiz-header-metric">
+                              <strong>4</strong>
+                              <span>Options each</span>
+                            </div>
+                            <div className="manual-quiz-header-metric">
+                              <strong>{answeredQuizCount}</strong>
+                              <span>Answered</span>
+                            </div>
+                            <div className="manual-quiz-header-metric">
+                              <strong>{correctQuizCount}</strong>
+                              <span>Correct</span>
+                            </div>
+                          </div>
+                          {selectedQuizQuestions.map((rawQuestion, index) => {
                             const question = normalizeQuizQuestion(rawQuestion);
                             const selectedOption = quizSelections[`${moduleWorkflowTarget}-${index}`] || "";
                             const isCorrect = selectedOption && selectedOption === question.correctOption;
@@ -1575,9 +1922,12 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
                                 </div>
                                 {showFeedback ? (
                                   <div className={`manual-quiz-feedback ${isCorrect ? "correct" : "incorrect"}`}>
-                                    {isCorrect
-                                      ? "Correct"
-                                      : `Incorrect. Correct answer: ${question.correctOption || question.answer}`}
+                                    <strong>
+                                      {isCorrect
+                                        ? "Correct"
+                                        : `Incorrect. Correct answer: ${question.correctOption || question.answer}`}
+                                    </strong>
+                                    {question.explanation ? <span>{question.explanation}</span> : null}
                                   </div>
                                 ) : null}
                               </div>
@@ -1592,16 +1942,53 @@ export default function ManualStudentInteractionView({ apiBase, active }) {
 
                   {moduleWorkflowTarget === "flashcards" ? (
                     <div className="manual-summary-panel">
-                      <h4>Flashcards</h4>
-                      {(selectedWorkflow.workflow?.assets?.flashcards || []).length ? (
-                        <div className="manual-agent-list">
-                          {selectedWorkflow.workflow.assets.flashcards.map((card, index) => (
-                            <div key={`${card.front}-${index}`} className="manual-agent-item">
-                              <strong>{card.front}</strong>
-                              <span>{card.back}</span>
+                      <div className="manual-output-head">
+                        <div>
+                          <h4>Flashcards</h4>
+                          <p className="manual-muted">
+                            Flip through the key prompts and answers pulled from the module materials.
+                          </p>
+                        </div>
+                        <div className="manual-card-actions">
+                          <button type="button" className="manual-btn" onClick={() => setAllFlashcards(selectedFlashcards, true)}>
+                            Flip all
+                          </button>
+                          <button type="button" className="manual-btn" onClick={() => setAllFlashcards(selectedFlashcards, false)}>
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+                      {selectedFlashcards.length ? (
+                        <>
+                          <div className="manual-flashcard-metrics">
+                            <div className="manual-flashcard-metric">
+                              <strong>{selectedFlashcards.length}</strong>
+                              <span>Total cards</span>
                             </div>
+                            <div className="manual-flashcard-metric">
+                              <strong>{flippedFlashcardCount}</strong>
+                              <span>Reviewed</span>
+                            </div>
+                          </div>
+                        <div className="manual-flashcard-grid">
+                          {selectedFlashcards.map((card, index) => (
+                            <button
+                              key={`${card.front}-${index}`}
+                              type="button"
+                              className={`manual-flashcard ${flashcardFlips[`flashcard-${index}`] ? "flipped" : ""}`}
+                              onClick={() => toggleFlashcard(`flashcard-${index}`)}
+                            >
+                              <span className="manual-flashcard-side-label">
+                                {flashcardFlips[`flashcard-${index}`] ? "Answer" : "Prompt"}
+                              </span>
+                              <strong>
+                                {flashcardFlips[`flashcard-${index}`] ? card.back : card.front}
+                              </strong>
+                              <span className="manual-flashcard-hint">Click to flip</span>
+                            </button>
                           ))}
                         </div>
+                        </>
                       ) : (
                         <p className="manual-empty">No flashcards generated yet.</p>
                       )}
