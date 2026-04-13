@@ -1,4 +1,4 @@
-# Canvas Copilot — Agentic AI Layer for LMS
+# Canvas Copilot — Agentic AI Layer for Canvas
 
 Canvas Co-Pilot turns Canvas from a passive course portal into an active academic support system. Instead of forcing students to constantly check for changes, interpret grades, read every file manually, and decide what to study next, the platform monitors course state, understands what changed, and generates useful learning support automatically.
 
